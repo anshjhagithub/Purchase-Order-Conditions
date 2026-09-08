@@ -1,0 +1,705 @@
+<title>PO Conditions — Prototype</title>
+<style>
+  :root{
+    --navy-950:#14152b; --navy-900:#1a1c33;
+    --indigo:#635bff; --indigo-dark:#4f47e0;
+    --cream-100:#fdf3e3; --amber:#e8a838;
+    --mint-100:#e2f6ec; --mint:#2fae6c;
+    --lav-100:#f2f1f8; --lav-200:#e7e5f3;
+    --page:#f4f5f9; --card:#ffffff;
+    --ink:#1a1c33; --ink-soft:#5b5f76; --ink-faint:#8b8fa3;
+    --line:#e6e7f0;
+    --rose:#e0396b; --rose-bg:#fdecf1;
+    --emerald:#1f9d63; --emerald-bg:#e7f8ef;
+    --sky:#0e7fc4; --sky-bg:#e7f4fc;
+    --violet:#7c4fd6; --violet-bg:#f1ecfb;
+    --orange:#d97a1f; --orange-bg:#fbeee0;
+    --slate-bg:#eef0f4;
+  }
+  :root[data-theme="dark"]{
+    --page:#0f1020; --card:#181933; --ink:#eef0fb; --ink-soft:#a9adc7; --ink-faint:#71759a;
+    --line:#2b2d4d; --lav-100:#20223f; --lav-200:#282a4d; --slate-bg:#20223f;
+    --cream-100:#3a301c; --mint-100:#173627;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --page:#0f1020; --card:#181933; --ink:#eef0fb; --ink-soft:#a9adc7; --ink-faint:#71759a;
+      --line:#2b2d4d; --lav-100:#20223f; --lav-200:#282a4d; --slate-bg:#20223f;
+      --cream-100:#3a301c; --mint-100:#173627;
+    }
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--page);color:var(--ink);font-variant-numeric:tabular-nums;}
+  button{font:inherit;cursor:pointer;}
+  input,select,textarea{font:inherit;}
+  a{color:inherit;text-decoration:none;}
+  .app{display:flex;height:100vh;overflow:hidden;}
+  .rail{width:56px;background:var(--navy-950);display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:16px 0;flex-shrink:0;}
+  .rail-logo{width:36px;height:36px;border-radius:10px;background:var(--indigo);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;}
+  .rail-icon{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#8b8fc0;}
+  .rail-icon:hover{background:#23253f;color:#fff;}
+  .nav{width:248px;background:var(--card);border-right:1px solid var(--line);display:flex;flex-direction:column;flex-shrink:0;}
+  .nav-head{padding:18px 20px;border-bottom:1px solid var(--line);}
+  .nav-head b{font-size:15px;}
+  .nav-head div{font-size:11.5px;color:var(--ink-faint);margin-top:2px;}
+  .nav-section{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-faint);padding:14px 20px 6px;}
+  .nav-items{padding:0 12px;display:flex;flex-direction:column;gap:2px;overflow-y:auto;}
+  .nav-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;font-size:13.5px;color:var(--ink-soft);border:none;background:none;text-align:left;width:100%;}
+  .nav-item:hover{background:var(--lav-100);}
+  .nav-item.active{background:var(--lav-100);color:var(--indigo);font-weight:600;}
+  .main{flex:1;overflow-y:auto;}
+  .wrap{max-width:1300px;margin:0 auto;padding:32px;}
+  .eyebrow{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-faint);margin-bottom:4px;}
+  h1{font-size:24px;margin:0;}
+  .sub{color:var(--ink-soft);font-size:13.5px;max-width:640px;margin-top:6px;line-height:1.5;}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:16px;}
+  .btn{display:inline-flex;align-items:center;gap:6px;border-radius:10px;padding:9px 16px;font-size:13.5px;font-weight:600;border:1px solid transparent;}
+  .btn-primary{background:var(--indigo);color:#fff;}
+  .btn-primary:hover{background:var(--indigo-dark);}
+  .btn-secondary{background:var(--card);border-color:var(--line);color:var(--ink-soft);}
+  .btn-secondary:hover{background:var(--lav-100);}
+  .btn-dark{background:var(--navy-950);color:#fff;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;}
+  .po-card{padding:20px 22px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;transition:.15s;}
+  .po-card:hover{border-color:var(--indigo);box-shadow:0 4px 18px -8px rgba(99,91,255,.25);}
+  .badge{display:inline-flex;align-items:center;gap:5px;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700;}
+  .badge-slate{background:var(--slate-bg);color:var(--ink-soft);}
+  table{width:100%;border-collapse:collapse;}
+  thead th{background:var(--slate-bg);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-faint);padding:10px 14px;text-align:left;white-space:nowrap;border-bottom:1px solid var(--line);}
+  tbody td{padding:11px 14px;font-size:13px;border-bottom:1px solid var(--line);white-space:nowrap;}
+  tbody tr:hover{background:var(--lav-100);}
+  .tablewrap{overflow-x:auto;border-radius:16px;border:1px solid var(--line);}
+  .stagebanner{border-radius:18px;padding:16px 22px;display:flex;align-items:center;justify-content:space-between;}
+  .stagebanner .icon{width:40px;height:40px;border-radius:50%;background:var(--card);display:flex;align-items:center;justify-content:center;font-size:17px;}
+  .stagebanner .title{font-size:16px;font-weight:700;}
+  .chip{background:rgba(255,255,255,.6);border-radius:6px;padding:2px 8px;font-size:12px;font-weight:600;}
+  :root[data-theme="dark"] .chip, @media (prefers-color-scheme:dark){.chip{background:rgba(255,255,255,.08);}}
+  .tabs{display:flex;gap:22px;border-bottom:1px solid var(--line);margin:18px 0;}
+  .tab{padding-bottom:10px;font-size:13.5px;font-weight:600;color:var(--ink-faint);border:none;background:none;border-bottom:2px solid transparent;}
+  .tab.active{color:var(--ink);border-color:var(--ink);}
+  .layout{display:flex;gap:22px;align-items:flex-start;}
+  .col-main{flex:1;min-width:0;}
+  .col-side{width:280px;flex-shrink:0;display:flex;flex-direction:column;gap:14px;}
+  .side-card{padding:18px;}
+  .side-card b{font-size:14px;}
+  .fab{position:fixed;bottom:24px;right:24px;background:var(--cream-100);color:var(--amber);border:1px solid var(--amber);padding:10px 16px;border-radius:12px;font-weight:700;font-size:12.5px;box-shadow:0 8px 24px -8px rgba(0,0,0,.2);}
+  .field{margin-bottom:14px;}
+  .field label{display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--ink-faint);margin-bottom:6px;}
+  .field input, .field select, .field textarea{width:100%;border-radius:10px;border:1px solid var(--line);background:var(--lav-100);padding:10px 13px;font-size:13.5px;color:var(--ink);}
+  .field input:focus, .field select:focus, .field textarea:focus{outline:2px solid var(--indigo);outline-offset:1px;background:var(--card);}
+  .field input:disabled{opacity:.6;}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  .section-title{font-size:12.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--ink-faint);margin:22px 0 10px;}
+  .section-title:first-child{margin-top:0;}
+  .modal-overlay{position:fixed;inset:0;background:rgba(15,16,35,.45);display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;overflow-y:auto;z-index:50;}
+  .modal{background:var(--card);border-radius:20px;width:100%;max-width:640px;max-height:88vh;display:flex;flex-direction:column;}
+  .modal.wide{max-width:760px;}
+  .modal-head{padding:26px 30px 18px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:flex-start;}
+  .modal-head h2{font-size:24px;margin:0 0 6px;}
+  .modal-head p{font-size:13px;color:var(--ink-soft);margin:0;max-width:440px;line-height:1.5;}
+  .modal-close{background:none;border:none;font-size:20px;color:var(--ink-faint);cursor:pointer;line-height:1;padding:4px;}
+  .modal-body{padding:22px 30px;overflow-y:auto;}
+  .modal-foot{padding:18px 30px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px;}
+  .calc-box{background:var(--lav-100);border:1px solid var(--lav-200);border-radius:12px;padding:14px 16px;margin-top:6px;}
+  .calc-row{display:flex;justify-content:space-between;font-size:13px;padding:3px 0;}
+  .calc-row b{font-weight:700;}
+  .calc-note{font-size:10.5px;color:var(--ink-faint);margin-left:4px;}
+  .cat-pill{display:inline-flex;align-items:center;gap:5px;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700;}
+  .dot{width:6px;height:6px;border-radius:50%;}
+  .apply-opt{border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-size:12.5px;font-weight:600;background:var(--card);color:var(--ink-soft);}
+  .apply-opt.sel{border-color:var(--indigo);background:var(--indigo);color:#fff;}
+  .hint{font-size:11.5px;color:var(--ink-faint);margin-top:5px;line-height:1.4;}
+  .pillgroup{display:flex;flex-wrap:wrap;gap:6px;}
+  .footnote{font-size:12px;color:var(--ink-faint);margin-top:26px;line-height:1.6;border-top:1px solid var(--line);padding-top:16px;}
+  ::-webkit-scrollbar{width:8px;height:8px;} ::-webkit-scrollbar-thumb{background:var(--line);border-radius:99px;}
+</style>
+
+<div class="app">
+  <div class="rail">
+    <div style="display:flex;flex-direction:column;align-items:center;gap:14px;">
+      <div class="rail-logo">GM</div>
+      <div class="rail-icon">⌕</div>
+    </div>
+    <div class="rail-icon">⎋</div>
+  </div>
+  <div class="nav">
+    <div class="nav-head"><b>Greencell Mobility</b><div>dice.tech</div></div>
+    <div id="navBody"></div>
+  </div>
+  <div class="main"><div class="wrap" id="mainWrap"></div></div>
+</div>
+<div id="modalRoot"></div>
+
+<script>
+// ───────────────────────── Data model & seed data ─────────────────────────
+const CATEGORY_LABELS = {DISC:'Discount',SURC:'Surcharge',LOGI:'Logistics / Delivery Cost',STAT:'Statutory Levy / Duty',DEDN:'Deduction / Retention',OTHR:'Other Charge / Pass-through'};
+const CATEGORY_COLOR = {
+  DISC:{bg:'var(--rose-bg)',fg:'var(--rose)'}, SURC:{bg:'var(--orange-bg)',fg:'var(--orange)'},
+  LOGI:{bg:'var(--sky-bg)',fg:'var(--sky)'}, STAT:{bg:'var(--violet-bg)',fg:'var(--violet)'},
+  DEDN:{bg:'var(--orange-bg)',fg:'var(--orange)'}, OTHR:{bg:'var(--slate-bg)',fg:'var(--ink-soft)'}
+};
+const BASIS_LABELS = {
+  FIXED_PER_PO:'Fixed amount — per PO', FIXED_PER_LINE:'Fixed amount — per line', RATE_X_QTY:'Rate × line quantity',
+  PCT_OF_LINE_BASE:'% of line base value', PCT_OF_SELECTED_BASE:'% of selected base',
+  RATE_X_WEIGHT:'Rate × weight', RATE_X_VOLUME:'Rate × volume', SLAB:'Slab / scale'
+};
+const BASIS_RATE_LABEL = {FIXED_PER_PO:'Amount',FIXED_PER_LINE:'Amount',RATE_X_QTY:'Rate per unit',PCT_OF_LINE_BASE:'Percentage',PCT_OF_SELECTED_BASE:'Percentage',RATE_X_WEIGHT:'Rate per KG',RATE_X_VOLUME:'Rate per CBM',SLAB:'Slab grid'};
+const CATEGORY_PRESETS = {
+  DISC:{sign:'-',signLocked:true,calcBasis:'PCT_OF_LINE_BASE',vendorRule:'SAME_AS_PO',capitalise:true,seq:[10,19]},
+  SURC:{sign:'+',signLocked:true,calcBasis:'FIXED_PER_LINE',vendorRule:'SAME_AS_PO',capitalise:true,seq:[20,29]},
+  LOGI:{sign:'+',signLocked:true,calcBasis:'RATE_X_WEIGHT',vendorRule:'MUST_DIFFER',capitalise:true,seq:[30,49]},
+  STAT:{sign:'+',signLocked:true,calcBasis:'PCT_OF_SELECTED_BASE',vendorRule:'MUST_DIFFER',capitalise:true,seq:[50,79]},
+  DEDN:{sign:'-',signLocked:true,calcBasis:'PCT_OF_LINE_BASE',vendorRule:'SAME_AS_PO',capitalise:false,seq:[90,99]},
+  OTHR:{sign:'+',signLocked:false,calcBasis:'FIXED_PER_PO',vendorRule:'EITHER',capitalise:false,seq:[80,89]},
+};
+const BASE_STEP='BASE';
+
+const VENDORS = [
+  {id:'ven-cello',name:'Cello World Limited',state:'Maharashtra'},
+  {id:'ven-apex',name:'Apex Battery Components Pte Ltd',state:'Gujarat'},
+  {id:'ven-maersk',name:'Maersk Line Shipping Pvt Ltd',state:'Gujarat'},
+  {id:'ven-insure',name:'Continental Marine Insurers Ltd',state:'Maharashtra'},
+  {id:'ven-cha',name:'Bharat Customs Clearance & Cargo',state:'Maharashtra'},
+  {id:'ven-authority',name:'Office of the Commissioner of Customs',state:'Gujarat'},
+];
+const TAX_MASTER = [
+  {code:'8507',type:'HSN',desc:'Lithium-ion battery packs',rate:18},
+  {code:'8503',type:'HSN',desc:'Electric motor parts (BLDC)',rate:18},
+  {code:'996521',type:'SAC',desc:'Sea freight transport of goods',rate:5},
+  {code:'997133',type:'SAC',desc:'Marine / transit insurance services',rate:18},
+  {code:'996713',type:'SAC',desc:'Customs clearing & forwarding services',rate:18},
+  {code:'996812',type:'SAC',desc:'Packing & handling services',rate:18},
+];
+// PRD §4 field 1.4 — Sub-category is an Enum filtered by Category (reporting rollup for spend analytics).
+const SUBCATEGORY_OPTIONS = {
+  DISC:['Volume Discount','Trade Discount','Promotional / Scheme Discount','Cash / Early Payment Discount','Rebate Accrual','Settlement Discount'],
+  SURC:['Handling Charges','Processing Charges','Fuel Surcharge','Small Order Surcharge','Expedite / Rush Charge','Split Delivery Charge','Peak Season Surcharge','Currency Adjustment Factor (CAF)','Tooling / Die / Setup Charge','Testing / Certification Charge','Design / Drawing Charge'],
+  LOGI:['Ocean Freight','Air Freight','Road / Inland Freight','Rail Freight','Last-Mile Delivery','Loading / Unloading','Packing & Forwarding','Special / Export Packing','Returnable Packaging Deposit','Marine / Transit Insurance','Terminal Handling Charges (THC)','CFS / Container Freight Station','Warehousing / Storage','Demurrage & Detention','Documentation Charges','Customs Clearance / CHA Fee'],
+  STAT:['Basic Customs Duty','Social Welfare Surcharge','Anti-Dumping Duty','Safeguard Duty','Countervailing Duty','Excise Duty','GST Compensation Cess','Environmental / Green Cess','E-waste / EPR Levy','Road Tax / Permit Fee'],
+  DEDN:['Retention','Liquidated Damages / Late Penalty','Quality / Rejection Deduction','Security Deposit / Performance Guarantee','TDS / TCS','Advance Adjustment / Recovery','Shortage Recovery','Debit Note Recovery'],
+  OTHR:['Reimbursable Expenses','Third-Party Inspection','Installation & Commissioning','Training Charges','AMC / Extended Warranty','Licence / Subscription Add-on','Statutory Fees Paid on Behalf'],
+};
+
+let idc = 0; const uid = (p) => `${p}_${(++idc).toString(36)}${Date.now().toString(36).slice(-4)}`;
+
+function master(code,name,category,over){
+  const p = CATEGORY_PRESETS[category];
+  return Object.assign({
+    id:uid('cm'), code, name, category, subCategory:'', description:'', printOnPdf:true,
+    calcBasis:p.calcBasis, uomId:null, defaultRate:0, sign:p.sign, rounding:'NORMAL', statistical:false,
+    codeType:category==='LOGI'||category==='OTHR'?'SAC':'HSN', taxCode:null, gstTreatment:'DEDUCTIBLE',
+    defaultVendorId:null, vendorRule:p.vendorRule, capitalise:p.capitalise,
+    sequence:p.seq[0], calculateOn:'LINE_BASE', calculateOnCodes:[],
+    requiresServiceConfirmation:category==='LOGI', autoConfirmOnMainGrn:category==='LOGI',
+    confirmationOnPartialGrn:'PROPORTIONAL', rateEditableOnPo:category!=='STAT', vendorEditableOnPo:true,
+    allowedLevel:category==='LOGI'||category==='STAT'?'HEADER':'BOTH', distributionBasis:'VALUE',
+    status:'Active', version:1, usedOnAnyPo:false, slabTable:[]
+  }, over);
+}
+
+const CONDITIONS = [
+  master('VOL-DISC','Volume / Quantity Discount','DISC',{description:'Slab-driven off line quantity, negotiated standing vendor terms.',defaultRate:5,sequence:10,usedOnAnyPo:true}),
+  master('TRADE-DISC','Trade Discount','DISC',{description:'Standing vendor terms applied to line value.',defaultRate:3,sequence:11}),
+  master('CASH-DISC','Cash / Early Payment Discount','DISC',{description:'Statistical only — realised at payment, not PO.',defaultRate:2,statistical:true,sequence:12}),
+  master('FUEL-SURC','Fuel Surcharge','SURC',{description:'Index-linked slab band; revises monthly.',calcBasis:'SLAB',calculateOn:'SELECTED',calculateOnCodes:[BASE_STEP,'VOL-DISC'],taxCode:'996812',sequence:20,usedOnAnyPo:true,
+    slabTable:[{from:0,to:50000,rate:1},{from:50000,to:100000,rate:3},{from:100000,to:9e9,rate:4}]}),
+  master('HANDLING-CHG','Handling Charges','SURC',{calcBasis:'FIXED_PER_LINE',defaultRate:250,taxCode:'996812',sequence:21}),
+  master('OCEAN-FRT','Ocean Freight','LOGI',{description:'Shipment-level, rate per CBM. Confirmed via Service Confirmation, not a GRN.',calcBasis:'RATE_X_VOLUME',defaultRate:500,taxCode:'996521',gstTreatment:'RCM',defaultVendorId:'ven-maersk',sequence:30,usedOnAnyPo:true}),
+  master('MARINE-INS','Marine / Transit Insurance','LOGI',{description:'Calculates on CIF (base+freight), not base alone. Premium truncated, not rounded.',calcBasis:'PCT_OF_SELECTED_BASE',calculateOn:'SELECTED',calculateOnCodes:[BASE_STEP,'VOL-DISC','FUEL-SURC','OCEAN-FRT'],defaultRate:1,taxCode:'997133',defaultVendorId:'ven-insure',rounding:'DOWN',sequence:40,usedOnAnyPo:true}),
+  master('BCD','Basic Customs Duty','STAT',{description:'Non-creditable — a real landed cost. Rate is derived, not entered.',calculateOn:'SELECTED',calculateOnCodes:[BASE_STEP,'VOL-DISC','FUEL-SURC','OCEAN-FRT','MARINE-INS'],defaultRate:10,gstTreatment:'NON_DEDUCTIBLE',defaultVendorId:'ven-authority',sequence:50,usedOnAnyPo:true}),
+  master('SWS','Social Welfare Surcharge','STAT',{description:'A tax on a tax — computed on BCD only.',calculateOn:'SELECTED',calculateOnCodes:['BCD'],defaultRate:10,gstTreatment:'NON_DEDUCTIBLE',defaultVendorId:'ven-authority',sequence:60,usedOnAnyPo:true}),
+  master('IMPORT-IGST','Import IGST','STAT',{description:'Creditable — flagged Non-capitalising even in the same cascade as BCD.',calculateOn:'SELECTED',calculateOnCodes:[BASE_STEP,'VOL-DISC','FUEL-SURC','OCEAN-FRT','MARINE-INS','BCD','SWS'],defaultRate:18,capitalise:false,defaultVendorId:'ven-authority',sequence:70,usedOnAnyPo:true}),
+  master('CHA-FEE','Customs Clearance / CHA Fee','LOGI',{calcBasis:'FIXED_PER_PO',defaultRate:3500,taxCode:'996713',defaultVendorId:'ven-cha',sequence:80,usedOnAnyPo:true}),
+  master('RETENTION','Retention Money','DEDN',{description:'Withheld from vendor; released on commissioning or warranty expiry.',defaultRate:5,sequence:90,usedOnAnyPo:true}),
+];
+const findMaster = (code) => CONDITIONS.find(c=>c.code===code);
+
+function appliedFrom(code, poVendor, over){
+  const m = findMaster(code);
+  const tax = TAX_MASTER.find(t=>t.code===m.taxCode);
+  const vendor = m.vendorRule==='SAME_AS_PO' ? null : VENDORS.find(v=>v.id===m.defaultVendorId);
+  return Object.assign({
+    id:uid('ac'), conditionCode:m.code, conditionName:m.name, category:m.category,
+    sequence:m.sequence, calcBasis:m.calcBasis, calculateOn:m.calculateOn, calculateOnCodes:m.calculateOnCodes,
+    sign:m.sign, rate:m.defaultRate, qty:1, vendorId:vendor?vendor.id:poVendor.id, vendorName:vendor?vendor.name:poVendor.name,
+    taxCode:m.taxCode, gstRate:tax?tax.rate:0, gstTreatment:m.gstTreatment, capitalise:m.capitalise,
+    statistical:m.statistical, rounding:m.rounding, requiresServiceConfirmation:m.requiresServiceConfirmation,
+    autoConfirmOnMainGrn:m.autoConfirmOnMainGrn, confirmationMode:m.confirmationOnPartialGrn,
+    status:'Draft', confirmedPct:0, slabTable:m.slabTable, notes:''
+  }, over);
+}
+
+const apexVendor = {id:'ven-apex',name:'Apex Battery Components Pte Ltd'};
+const celloVendor = {id:'ven-cello',name:'Cello World Limited'};
+const line1Id = uid('line');
+const PO_IMPORT = {
+  id:uid('po'), poNumber:'PO-GRNCL-00318', vendorId:'ven-apex', vendorName:'Apex Battery Components Pte Ltd',
+  deliveryState:'Maharashtra', currency:'INR', incoterm:'CIF', stage:'Goods Receipt Pending', stageIndex:4, stagePercent:57, owner:'Arpit Agarwal',
+  lines:[{id:line1Id,lineNo:1,itemName:'BLDC Hub Motor Assembly — Imported Batch',itemRef:'PRODUCT-GRNCL-0000214',hsn:'8503',qty:16,uom:'Nos',unitPrice:6250,unitWeightKg:8.5,unitVolumeCbm:1,deliveredQty:16,
+    conditions:['VOL-DISC','FUEL-SURC','OCEAN-FRT','MARINE-INS','BCD','SWS','IMPORT-IGST','CHA-FEE','RETENTION'].map(c=>appliedFrom(c,apexVendor,c==='OCEAN-FRT'||c==='CHA-FEE'?{status:'Confirmed',confirmedPct:100}:{qty:c==='OCEAN-FRT'?16:1}))
+  }],
+  headerConditions:[]
+};
+const line2Id = uid('line');
+const PO_DOMESTIC = {
+  id:uid('po'), poNumber:'PO-GRNCL-00205', vendorId:'ven-cello', vendorName:'Cello World Limited',
+  deliveryState:'Maharashtra', currency:'INR', incoterm:'DAP', stage:'Draft', stageIndex:1, stagePercent:14, owner:'Admin',
+  lines:[{id:line2Id,lineNo:1,itemName:'Lithium Battery Pack 5kWh',itemRef:'PRODUCT-GRNCL-0000107',hsn:'8507',qty:50,uom:'Nos',unitPrice:12000,unitWeightKg:42,unitVolumeCbm:1,deliveredQty:0,
+    conditions:['TRADE-DISC','HANDLING-CHG','RETENTION'].map(c=>appliedFrom(c,celloVendor,{}))
+  }],
+  headerConditions:[]
+};
+const POS = [PO_DOMESTIC, PO_IMPORT];
+
+// ───────────────────────── Calculation engine (ported from the React prototype's src/engine/calc.ts) ─────────────────────────
+function roundAmount(v,rule){
+  const sign=v<0?-1:1, abs=Math.abs(v);
+  if(rule==='NORMAL') return sign*Math.round(abs);
+  if(rule==='UP') return sign*Math.ceil(abs);
+  if(rule==='DOWN') return sign*Math.floor(abs);
+  return Math.round(v*100)/100;
+}
+function computeConditionAmount(cond, ctx){
+  const calcBase = cond.calculateOn==='LINE_BASE' ? ctx.lineBaseValue :
+    cond.calculateOnCodes.reduce((s,code)=> s + (code===BASE_STEP?ctx.lineBaseValue:(ctx.prior[code]||0)), 0);
+  let raw=0;
+  switch(cond.calcBasis){
+    case 'FIXED_PER_PO': case 'FIXED_PER_LINE': raw=cond.rate; break;
+    case 'RATE_X_QTY': raw=cond.rate*ctx.lineQty; break;
+    case 'PCT_OF_LINE_BASE': raw=(cond.rate/100)*ctx.lineBaseValue; break;
+    case 'PCT_OF_SELECTED_BASE': raw=(cond.rate/100)*calcBase; break;
+    case 'RATE_X_WEIGHT': raw=cond.rate*(ctx.lineQty*ctx.unitWeightKg); break;
+    case 'RATE_X_VOLUME': raw=cond.rate*(ctx.lineQty*ctx.unitVolumeCbm); break;
+    case 'SLAB': {
+      const driver = cond.calculateOn==='SELECTED' ? calcBase : ctx.lineQty;
+      const row = (cond.slabTable||[]).find(r=>driver>=r.from && driver<r.to);
+      raw = row ? (row.rate/100)*calcBase : 0; break;
+    }
+  }
+  const signed = cond.sign==='-' ? -Math.abs(raw) : Math.abs(raw);
+  const amount = roundAmount(signed, cond.rounding);
+  const gstBase = Math.abs(amount);
+  const gstAmount = (cond.gstTreatment==='EXEMPT'||cond.gstTreatment==='NIL_RATED') ? 0 : Math.round(gstBase*(cond.gstRate/100)*100)/100;
+  return {amount, gstAmount, calcBase};
+}
+function jurisdiction(vendorId, deliveryState, treatment){
+  if(treatment==='EXEMPT'||treatment==='NIL_RATED') return 'NONE';
+  if(treatment==='RCM') return 'RCM';
+  const v = VENDORS.find(x=>x.id===vendorId);
+  if(!v) return 'NONE';
+  return v.state===deliveryState ? 'CGST_SGST' : 'IGST';
+}
+function computeLine(line, deliveryState){
+  const lineBaseValue = Math.round(line.qty*line.unitPrice*100)/100;
+  const sorted=[...line.conditions].sort((a,b)=>a.sequence-b.sequence);
+  const prior={}; const items=[];
+  for(const cond of sorted){
+    const r = computeConditionAmount(cond,{lineBaseValue,lineQty:line.qty,unitWeightKg:line.unitWeightKg,unitVolumeCbm:line.unitVolumeCbm,prior});
+    prior[cond.conditionCode]=r.amount;
+    const j = jurisdiction(cond.vendorId, deliveryState, cond.gstTreatment);
+    let cgst=0,sgst=0,igst=0,rcm=0;
+    if(j==='CGST_SGST'){cgst=Math.round(r.gstAmount/2*100)/100; sgst=r.gstAmount-cgst;}
+    else if(j==='IGST'){igst=r.gstAmount;} else if(j==='RCM'){rcm=r.gstAmount;}
+    items.push(Object.assign({},cond,{calcBaseUsed:r.calcBase, amount:r.amount, gstAmount:r.gstAmount, jurisdiction:j, cgst,sgst,igst,rcm}));
+  }
+  return {lineBaseValue, items};
+}
+function computePO(po){
+  const lineComps = po.lines.map(l=>({line:l, ...computeLine(l, po.deliveryState)}));
+  const baseAmount = lineComps.reduce((s,lc)=>s+lc.lineBaseValue,0);
+  const catTotals = {DISC:0,SURC:0,LOGI:0,STAT:0,DEDN:0,OTHR:0};
+  let capitalisedTotal=0, taxableValue=baseAmount, cgstTotal=0,sgstTotal=0,igstTotal=0,rcmTotal=0,statisticalTotal=0;
+  const payables = new Map();
+  const addPay=(id,name,amt)=>{const cur=payables.get(id)||{vendorId:id,vendorName:name,amount:0}; cur.amount+=amt; payables.set(id,cur);};
+  lineComps.forEach(lc=>addPay(po.vendorId, po.vendorName, lc.lineBaseValue));
+  lineComps.forEach(lc=>lc.items.forEach(item=>{
+    if(item.statistical){statisticalTotal+=item.amount; return;}
+    catTotals[item.category]+=item.amount;
+    if(item.capitalise) capitalisedTotal+=item.amount;
+    taxableValue+=item.amount; cgstTotal+=item.cgst; sgstTotal+=item.sgst; igstTotal+=item.igst; rcmTotal+=item.rcm;
+    addPay(item.vendorId,item.vendorName,item.amount+item.cgst+item.sgst+item.igst);
+  }));
+  const poTotal = taxableValue+cgstTotal+sgstTotal+igstTotal;
+  const landedCost = baseAmount+capitalisedTotal;
+  return {lineComps, baseAmount, catTotals, capitalisedTotal, landedCost, taxableValue, cgstTotal, sgstTotal, igstTotal, rcmTotal, statisticalTotal, poTotal,
+    payables:[...payables.values()].filter(v=>Math.abs(v.amount)>0.005)};
+}
+function fmt(n, cur){
+  cur = cur||'INR';
+  const sym = cur==='INR'?'₹':cur+' ';
+  const r = Math.round(n*100)/100;
+  const s = Math.abs(r).toLocaleString('en-IN',{maximumFractionDigits:2});
+  return (r<0?'−':'')+sym+s;
+}
+
+// ───────────────────────── Tiny render helpers ─────────────────────────
+const el = (html) => { const t=document.createElement('template'); t.innerHTML=html.trim(); return t.content.firstElementChild; };
+function catPill(cat){ const c=CATEGORY_COLOR[cat]; return `<span class="cat-pill" style="background:${c.bg};color:${c.fg}"><span class="dot" style="background:${c.fg}"></span>${cat}</span>`; }
+function statusBadge(s){ const map={Draft:['var(--slate-bg)','var(--ink-soft)'],Confirmed:['var(--emerald-bg)','var(--emerald)'],'Partially Confirmed':['var(--orange-bg)','var(--orange)']}; const [bg,fg]=map[s]||map.Draft; return `<span class="badge" style="background:${bg};color:${fg}">${s}</span>`; }
+
+let state = { view:'dashboard', poId:null, tab:'Line Items', addConditionOpen:false, cmFormOpen:false, cmList: CONDITIONS };
+
+function render(){
+  renderNav();
+  const w = document.getElementById('mainWrap');
+  w.innerHTML = '';
+  if(state.view==='dashboard') w.appendChild(renderDashboard());
+  else if(state.view==='po') w.appendChild(renderPODetail());
+  else if(state.view==='cm') w.appendChild(renderConditionMaster());
+  renderModal();
+}
+
+function renderNav(){
+  const isCm = state.view==='cm';
+  const nav = document.getElementById('navBody');
+  const items = isCm
+    ? [['Procure to Pay Configuration','cm',true]]
+    : [['Dashboard','dashboard',true],['Purchase Orders','dashboard'],['GRN Management'],['Invoices & Payables'],['Configuration Studio','cm']];
+  nav.innerHTML = `<div class="nav-section">${isCm?'Control Room':'Procure to Pay'}</div><div class="nav-items">` +
+    items.map(([label,go,active])=>`<button class="nav-item ${active?'active':''}" data-nav="${go||''}">${label}</button>`).join('') + `</div>`;
+  nav.querySelectorAll('[data-nav]').forEach(b=>b.addEventListener('click',()=>{ const g=b.dataset.nav; if(g){ state.view=g; render(); }}));
+}
+
+function renderDashboard(){
+  const c = el(`<div>
+    <div class="row" style="margin-bottom:22px;">
+      <div><div class="eyebrow">Procure to Pay</div><h1>Purchase Orders</h1>
+      <div class="sub">Multi-condition POs — pricing, logistics, statutory and deduction conditions, all in one cascade.</div></div>
+      <button class="btn btn-secondary" id="goCm">⚙ Configure PO Conditions</button>
+    </div>
+    <div id="poList"></div>
+  </div>`);
+  c.querySelector('#goCm').addEventListener('click',()=>{state.view='cm'; render();});
+  const list = c.querySelector('#poList');
+  POS.forEach(po=>{
+    const comp = computePO(po);
+    const condCount = po.lines.reduce((s,l)=>s+l.conditions.length,0)+po.headerConditions.length;
+    const card = el(`<div class="card po-card" data-po="${po.id}" style="cursor:pointer;">
+      <div><div style="display:flex;align-items:center;gap:10px;"><b style="font-size:16px;">${po.poNumber}</b><span class="badge badge-slate">${po.stage}</span></div>
+      <div style="color:var(--ink-soft);font-size:13px;margin-top:4px;">${po.vendorName} · ${po.lines.length} line · ${condCount} conditions · ${po.incoterm}</div></div>
+      <div style="display:flex;align-items:center;gap:26px;"><div style="text-align:right;"><div style="font-size:11px;font-weight:600;color:var(--ink-faint);text-transform:uppercase;">PO Total</div>
+      <div style="font-size:16px;font-weight:700;">${fmt(comp.poTotal,po.currency)}</div></div><span style="color:var(--ink-faint);">↗</span></div>
+    </div>`);
+    card.addEventListener('click',()=>{state.view='po'; state.poId=po.id; state.tab='Line Items'; render();});
+    list.appendChild(card);
+  });
+  return c;
+}
+
+function stageBanner(po){
+  const isGrn = po.stageIndex>=4;
+  const theme = isGrn ? {bg:'var(--mint-100)',ring:'var(--mint)'} : {bg:'var(--cream-100)',ring:'var(--amber)'};
+  const pct = po.stagePercent;
+  const circ = 2*Math.PI*15, dash=(pct/100)*circ;
+  return `<div class="stagebanner" style="background:${theme.bg}">
+    <div style="display:flex;align-items:center;gap:14px;">
+      <div class="icon">${isGrn?'📦':'📝'}</div>
+      <div><div class="title">${isGrn?po.stage:'Purchase Order '+po.stage}</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:6px;font-size:12.5px;color:var(--ink-soft);flex-wrap:wrap;">
+        <span class="chip">Stage ${po.stageIndex}/7</span>•<span>${isGrn?po.vendorName:'Procurement Team'}</span>
+        <span class="chip">${isGrn?'Supplier':po.owner}</span>•<span class="chip">💡 ${isGrn?'Receive goods from vendor':'Generate and send PO to vendor'}</span></div></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <svg width="38" height="38" viewBox="0 0 40 40" style="transform:rotate(-90deg)">
+        <circle cx="20" cy="20" r="15" fill="none" stroke="#ffffff90" stroke-width="4"/>
+        <circle cx="20" cy="20" r="15" fill="none" stroke="${theme.ring}" stroke-width="4" stroke-dasharray="${dash} ${circ}" stroke-linecap="round"/>
+      </svg>
+      <span style="font-size:12px;font-weight:700;">${pct}%</span>
+    </div>
+  </div>`;
+}
+
+function rightPanel(po){
+  return `<div class="col-side">
+    <div class="card side-card"><div class="row"><b>Timeline</b><button class="btn" style="background:var(--amber);color:#fff;padding:7px 12px;font-size:12px;">⬇ Export</button></div>
+      <div style="margin-top:6px;display:inline-block;background:var(--slate-bg);color:var(--ink-soft);border-radius:6px;padding:2px 8px;font-size:11.5px;font-weight:600;">Overall TAT: &lt; 1m</div>
+      <div style="border-left:2px solid var(--emerald-bg);padding-left:12px;margin-top:14px;">
+        <div style="font-size:13px;font-weight:700;">✅ App Started</div>
+        <div style="font-size:12px;color:var(--ink-faint);">Created by ${po.owner}</div>
+      </div>
+    </div>
+    <div class="card side-card"><b>Multiple Email</b><div style="font-size:12.5px;color:var(--ink-faint);margin:6px 0 10px;">No Email Tagged</div><button class="btn btn-dark" style="width:100%;">+ Add Email</button></div>
+    <div class="card side-card"><b>Support Ticket</b><button class="btn btn-dark" style="width:100%;margin-top:10px;">+ Start Conversation</button></div>
+    <div class="card side-card"><b>Contract List</b><div style="font-size:12.5px;color:var(--ink-faint);margin-top:6px;">No contract found</div></div>
+  </div>`;
+}
+
+function renderPODetail(){
+  const po = POS.find(p=>p.id===state.poId);
+  const comp = computePO(po);
+  const c = el(`<div>
+    <div class="row" style="margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:12px;"><button class="btn btn-secondary" id="back" style="border-radius:50%;width:36px;height:36px;padding:0;">←</button><h1>${po.poNumber}</h1></div>
+      <button class="btn" style="background:var(--emerald-bg);color:var(--emerald);">Move Next →</button>
+    </div>
+    ${stageBanner(po)}
+    <div class="tabs">${['Overview','Line Items','GRN','Invoice','Documents'].map(t=>`<button class="tab ${state.tab===t?'active':''}" data-tab="${t}">${t}</button>`).join('')}</div>
+    <div class="layout"><div class="col-main" id="tabBody"></div>${rightPanel(po)}</div>
+    <div class="fab">💬 Comments</div>
+  </div>`);
+  c.querySelector('#back').addEventListener('click',()=>{state.view='dashboard'; render();});
+  c.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{state.tab=b.dataset.tab; render();}));
+  const body = c.querySelector('#tabBody');
+  if(state.tab==='Line Items') body.appendChild(renderLineItems(po, comp));
+  else if(state.tab==='GRN') body.appendChild(renderGrn(po));
+  else body.appendChild(el(`<div class="card" style="padding:60px;text-align:center;color:var(--ink-faint);">${state.tab} — out of scope for this lighter artifact build. See the full local prototype for this tab.</div>`));
+  return c;
+}
+
+function renderLineItems(po, comp){
+  const c = el(`<div style="display:flex;flex-direction:column;gap:20px;">
+    <div class="tablewrap"><table><thead><tr><th>#</th><th>Item</th><th>Qty/UoM</th><th>Price/Unit</th><th>Base Value</th><th>Conditions</th></tr></thead>
+    <tbody>${po.lines.map(l=>{const lc=comp.lineComps.find(x=>x.line.id===l.id);
+      return `<tr><td>${l.lineNo}</td><td><b>${l.itemName}</b><div style="font-size:11px;color:var(--ink-faint);">HSN ${l.hsn} · Ref ${l.itemRef}</div></td><td>${l.qty} ${l.uom}</td><td>${fmt(l.unitPrice,po.currency)}</td><td><b>${fmt(lc.lineBaseValue,po.currency)}</b></td><td>${l.conditions.length}</td></tr>`;
+    }).join('')}</tbody></table></div>
+
+    <div>
+      <div class="row" style="margin-bottom:8px;"><b style="font-size:13px;">Conditions</b>
+        <button class="btn btn-secondary" id="addCondBtn" style="padding:8px 14px;">+ Add Condition</button></div>
+      <div class="tablewrap"><table><thead><tr><th>Seq</th><th>Condition</th><th>Category</th><th>Vendor</th><th>Basis</th><th>Rate</th><th>Amount</th><th>GST</th><th>Total</th><th>Landed</th><th>Status</th></tr></thead>
+      <tbody>${comp.lineComps.flatMap(lc=>lc.items).sort((a,b)=>a.sequence-b.sequence).map(item=>`
+        <tr><td>${item.sequence}</td><td><b>${item.conditionName}</b></td><td>${catPill(item.category)}</td><td style="font-size:12px;">${item.vendorName}</td>
+        <td style="font-size:12px;">${BASIS_LABELS[item.calcBasis]}</td><td>${item.rate}</td>
+        <td style="font-weight:600;${item.amount<0?'color:var(--rose)':''}">${fmt(item.amount,po.currency)}</td>
+        <td>${fmt(item.gstAmount,po.currency)}${item.jurisdiction==='RCM'?' <span style="color:var(--orange);font-size:10px;">RCM</span>':''}</td>
+        <td style="font-weight:600;">${fmt(item.amount+(item.jurisdiction==='RCM'?0:item.gstAmount),po.currency)}</td>
+        <td>${item.capitalise?'Yes':'No'}</td><td>${statusBadge(item.status)}</td></tr>`).join('')}
+      </tbody></table></div>
+    </div>
+
+    <div class="card" style="padding:24px;">
+      <div style="font-weight:700;font-size:14px;margin-bottom:12px;">PO Summary</div>
+      <div style="max-width:420px;">
+        ${summaryRow('Base Amount (main items)', comp.baseAmount, po.currency, true)}
+        ${summaryRow('+ Discounts', comp.catTotals.DISC, po.currency)}
+        ${summaryRow('+ Surcharges', comp.catTotals.SURC, po.currency)}
+        ${summaryRow('+ Logistics conditions', comp.catTotals.LOGI, po.currency)}
+        ${summaryRow('+ Duties', comp.catTotals.STAT, po.currency)}
+        ${summaryRow('+ Deductions', comp.catTotals.DEDN, po.currency)}
+        <div style="border-top:1px solid var(--line);margin:6px 0;"></div>
+        ${summaryRow('Taxable Value', comp.taxableValue, po.currency, true)}
+        ${comp.cgstTotal>0?summaryRow('+ CGST', comp.cgstTotal, po.currency):''}
+        ${comp.sgstTotal>0?summaryRow('+ SGST', comp.sgstTotal, po.currency):''}
+        ${comp.igstTotal>0?summaryRow('+ IGST', comp.igstTotal, po.currency):''}
+        <div style="border-top:2px solid var(--ink);margin:6px 0;"></div>
+        ${summaryRow('PO Total', comp.poTotal, po.currency, true)}
+        <div style="margin-top:14px;padding-top:10px;border-top:1px dashed var(--line);">
+        ${comp.payables.map(v=>summaryRow('of which payable to '+v.vendorName, v.amount, po.currency, false, true)).join('')}
+        ${comp.rcmTotal>0?summaryRow('of which RCM (self-assessed, not paid)', comp.rcmTotal, po.currency, false, true):''}
+        </div>
+        <div class="row" style="background:var(--lav-100);border-radius:10px;padding:10px 14px;margin-top:14px;">
+          <span style="font-size:12.5px;font-weight:600;">Landed cost (capitalising only)</span>
+          <span style="font-weight:700;color:var(--indigo);">${fmt(comp.landedCost,po.currency)}</span>
+        </div>
+      </div>
+    </div>
+  </div>`);
+  c.querySelector('#addCondBtn').addEventListener('click',()=>{state.addConditionOpen={poId:po.id,lineId:po.lines[0].id}; render();});
+  return c;
+}
+function summaryRow(label,val,cur,bold,muted){
+  return `<div class="row" style="padding:4px 0;"><span style="font-size:13px;color:${muted?'var(--ink-faint)':bold?'var(--ink)':'var(--ink-soft)'};${bold?'font-weight:700':''}">${label}</span><span style="font-size:13.5px;${bold?'font-weight:700':'font-weight:500'}">${fmt(val,cur)}</span></div>`;
+}
+
+function renderGrn(po){
+  const c = el(`<div style="display:flex;flex-direction:column;gap:16px;">
+    <div class="card" style="padding:16px 20px;"><div class="row"><b>📦 Vendor Condition</b><div style="width:40px;height:22px;background:var(--indigo);border-radius:99px;position:relative;"><div style="width:16px;height:16px;background:#fff;border-radius:50%;position:absolute;top:3px;right:3px;"></div></div></div></div>
+    ${po.lines.map(l=>`
+    <div class="card">
+      <div style="padding:12px 20px;border-bottom:1px solid var(--line);font-weight:700;font-size:13px;">As Per Purchase Order</div>
+      <div class="tablewrap" style="border:none;border-radius:0;"><table><thead><tr><th>Details</th><th>Qty/Unit</th><th>Price/Unit</th><th>Delivered</th></tr></thead>
+      <tbody><tr><td><b>${l.itemName}</b><div style="font-size:11px;color:var(--ink-faint);">Ref ${l.itemRef} · HSN ${l.hsn}</div></td><td>${l.qty} ${l.uom}</td><td>${fmt(l.unitPrice,po.currency)}</td><td>${l.deliveredQty}</td></tr></tbody></table></div>
+      <div style="padding:14px 20px;border-top:1px solid var(--line);">
+        <div style="font-weight:700;font-size:13px;margin-bottom:8px;">Conditions</div>
+        <div class="tablewrap"><table><thead><tr><th>Condition</th><th>Category</th><th>Price</th><th>Vendor</th><th>Qty</th><th>Confirmation</th></tr></thead>
+        <tbody>${l.conditions.map(c=>`<tr><td><b>${c.conditionName}</b></td><td>${catPill(c.category)}</td><td>${c.rate}</td><td style="font-size:12px;">${c.vendorName}</td><td>${c.qty}</td>
+          <td>${c.requiresServiceConfirmation?statusBadge(c.status)+` <span style="font-size:11px;color:var(--ink-faint);">${c.confirmedPct}%</span>`:'<span style="color:var(--ink-faint);font-size:12px;">n/a</span>'}</td></tr>`).join('')}</tbody></table></div>
+      </div>
+    </div>`).join('')}
+  </div>`);
+  return c;
+}
+
+// ───────────────────────── Add Condition modal (live cascade preview) ─────────────────────────
+function renderModal(){
+  const root = document.getElementById('modalRoot');
+  root.innerHTML='';
+  if(state.addConditionOpen) root.appendChild(renderAddConditionModal());
+  if(state.cmFormOpen) root.appendChild(renderConditionMasterForm());
+}
+
+function renderAddConditionModal(){
+  const {poId,lineId} = state.addConditionOpen;
+  const po = POS.find(p=>p.id===poId);
+  const line = po.lines.find(l=>l.id===lineId);
+  const localState = renderAddConditionModal._state || (renderAddConditionModal._state = {code:'', vendorId:'', rate:0, qty:1});
+  const m = localState.code ? findMaster(localState.code) : null;
+
+  const overlay = el(`<div class="modal-overlay"><div class="modal">
+    <div class="modal-head"><div><h2>Add Conditions to Line Item</h2><p>Please add custom conditions on line item — the form reconfigures based on the selected condition's master data.</p></div><button class="modal-close" id="mClose">✕</button></div>
+    <div class="modal-body" id="mBody"></div>
+    <div class="modal-foot"><button class="btn btn-secondary" id="mCancel">Cancel</button><button class="btn btn-primary" id="mSave">Add Condition</button></div>
+  </div></div>`);
+  overlay.addEventListener('click',(e)=>{ if(e.target===overlay){ state.addConditionOpen=false; render(); }});
+  overlay.querySelector('#mClose').addEventListener('click',()=>{state.addConditionOpen=false; render();});
+  overlay.querySelector('#mCancel').addEventListener('click',()=>{state.addConditionOpen=false; render();});
+
+  const body = overlay.querySelector('#mBody');
+  body.innerHTML = `
+    <div class="field"><label>Select Condition *</label>
+      <select id="fCode"><option value="">Select Condition</option>${CONDITIONS.filter(c=>c.status==='Active').map(c=>`<option value="${c.code}" ${localState.code===c.code?'selected':''}>${c.code} — ${c.name}</option>`).join('')}</select>
+      ${m?`<div style="margin-top:8px;">${catPill(m.category)} <span style="font-size:12px;color:var(--ink-faint);margin-left:6px;">${m.description||''}</span></div>`:''}
+    </div>
+    <div id="fRest"></div>
+  `;
+  body.querySelector('#fCode').addEventListener('change',(e)=>{
+    localState.code = e.target.value;
+    const mm = findMaster(localState.code);
+    if(mm){ localState.vendorId = mm.vendorRule==='SAME_AS_PO' ? po.vendorId : (mm.defaultVendorId||po.vendorId); localState.rate = mm.defaultRate; localState.qty = ['FIXED_PER_PO','FIXED_PER_LINE'].includes(mm.calcBasis)?1:line.qty; }
+    render();
+  });
+
+  if(m){
+    const rest = body.querySelector('#fRest');
+    rest.innerHTML = `
+      <div class="field"><label>Vendor for Condition *</label>
+        <select id="fVendor">${VENDORS.map(v=>`<option value="${v.id}" ${localState.vendorId===v.id?'selected':''}>${v.name}</option>`).join('')}</select>
+        ${m.vendorRule==='MUST_DIFFER'?'<div class="hint">Must differ from the PO vendor (P1/P2).</div>':m.vendorRule==='SAME_AS_PO'?'<div class="hint">Locked to the PO vendor by category.</div>':''}
+      </div>
+      <div class="grid2">
+        <div class="field"><label>Basis</label><div style="padding:10px 13px;background:var(--slate-bg);border-radius:10px;font-size:13px;">${BASIS_LABELS[m.calcBasis]}</div></div>
+        <div class="field"><label>${BASIS_RATE_LABEL[m.calcBasis]}</label><input id="fRate" type="number" value="${localState.rate}" ${m.rateEditableOnPo?'':'disabled'}/></div>
+      </div>
+      <div class="field"><label>Quantity</label><input id="fQty" type="number" value="${localState.qty}" ${['FIXED_PER_PO','FIXED_PER_LINE'].includes(m.calcBasis)?'disabled':''}/></div>
+      <div class="field"><label>${m.codeType} + GST</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <span class="badge badge-slate">${m.taxCode||'—'}</span>
+          <span class="badge badge-slate">${(TAX_MASTER.find(t=>t.code===m.taxCode)||{}).rate||0}% GST</span>
+          ${m.gstTreatment==='RCM'?'<span class="badge" style="background:var(--orange-bg);color:var(--orange);">RCM — not payable to vendor</span>':''}
+        </div>
+      </div>
+      <div id="livePreview"></div>
+    `;
+    rest.querySelector('#fVendor').addEventListener('change',(e)=>{localState.vendorId=e.target.value; render();});
+    rest.querySelector('#fRate').addEventListener('input',(e)=>{localState.rate=Number(e.target.value); renderLivePreview();});
+    rest.querySelector('#fQty').addEventListener('input',(e)=>{localState.qty=Number(e.target.value); renderLivePreview();});
+    renderLivePreview();
+  }
+
+  function renderLivePreview(){
+    const box = overlay.querySelector('#livePreview');
+    if(!box) return;
+    const draft = appliedFrom(localState.code, {id:po.vendorId,name:po.vendorName}, {id:'__draft__', rate:localState.rate, qty:localState.qty, vendorId:localState.vendorId, vendorName:(VENDORS.find(v=>v.id===localState.vendorId)||{}).name});
+    const tempLine = Object.assign({}, line, {conditions:[...line.conditions, draft]});
+    const lc = computeLine(tempLine, po.deliveryState);
+    const computed = lc.items.find(i=>i.id==='__draft__');
+    box.innerHTML = `<div class="calc-box">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--indigo);margin-bottom:6px;">ⓘ Live Calculation</div>
+      <div class="calc-row"><span>Base for calculation</span><span>${fmt(computed.calcBaseUsed,po.currency)}</span></div>
+      <div class="calc-row"><b>${m.name}</b><b>${fmt(computed.amount,po.currency)}</b></div>
+      <div class="calc-row"><span>GST @ ${computed.gstRate}%${m.gstTreatment==='RCM'?' (RCM)':''}</span><span>${fmt(computed.gstAmount,po.currency)}${m.gstTreatment==='RCM'?' <span class="calc-note">not payable</span>':''}</span></div>
+      <div style="border-top:1px solid var(--lav-200);margin:6px 0;"></div>
+      <div class="calc-row"><b>Condition Total</b><b>${fmt(computed.amount+(m.gstTreatment==='RCM'?0:computed.gstAmount),po.currency)}</b></div>
+    </div>`;
+  }
+
+  overlay.querySelector('#mSave').addEventListener('click',()=>{
+    if(!localState.code) return;
+    const cond = appliedFrom(localState.code, {id:po.vendorId,name:po.vendorName}, {rate:localState.rate, qty:localState.qty, vendorId:localState.vendorId, vendorName:(VENDORS.find(v=>v.id===localState.vendorId)||{}).name});
+    line.conditions.push(cond);
+    renderAddConditionModal._state = null;
+    state.addConditionOpen=false;
+    render();
+  });
+
+  return overlay;
+}
+
+// ───────────────────────── Condition Master (list + form) ─────────────────────────
+function renderConditionMaster(){
+  const c = el(`<div>
+    <a href="#" id="backHub" style="font-size:13px;font-weight:600;color:var(--ink-soft);">← Procure to Pay Configuration</a>
+    <div class="row" style="margin-top:10px;"><div><h1>PO Conditions</h1><div class="sub">Condition master — category is the master switch that presets sign, vendor rules, capitalisation, and tax treatment for every charge line raised on a PO.</div></div>
+      <button class="btn btn-primary" id="addCm">+ Add Custom PO Condition</button></div>
+    <div class="tablewrap" style="margin-top:20px;"><table><thead><tr><th>Code</th><th>Name</th><th>Category</th><th>Calculation Basis</th><th>Sign</th><th>Sequence</th><th>Vendor Rule</th><th>Capitalise</th><th>Status</th></tr></thead>
+    <tbody>${state.cmList.map(m=>`<tr><td style="font-family:ui-monospace,monospace;font-size:11.5px;color:var(--ink-soft);">${m.code}</td><td><b>${m.name}</b></td><td>${catPill(m.category)}</td><td>${BASIS_LABELS[m.calcBasis]}</td>
+      <td><span style="display:inline-flex;width:20px;height:20px;border-radius:5px;align-items:center;justify-content:center;font-weight:700;background:${m.sign==='-'?'var(--rose-bg)':'var(--emerald-bg)'};color:${m.sign==='-'?'var(--rose)':'var(--emerald)'}">${m.sign}</span></td>
+      <td>${m.sequence}</td><td style="font-size:12px;">${m.vendorRule.replace(/_/g,' ').toLowerCase()}</td><td>${m.capitalise?'Yes':'No'}</td><td><span class="badge" style="background:var(--emerald-bg);color:var(--emerald);">${m.status}</span></td></tr>`).join('')}
+    </tbody></table></div>
+  </div>`);
+  c.querySelector('#backHub').addEventListener('click',(e)=>{e.preventDefault(); state.view='dashboard'; render();});
+  c.querySelector('#addCm').addEventListener('click',()=>{state.cmFormOpen=true; render();});
+  return c;
+}
+
+function renderConditionMasterForm(){
+  const s = renderConditionMasterForm._state || (renderConditionMasterForm._state = {category:'OTHR', code:'', name:'', calcBasis:CATEGORY_PRESETS.OTHR.calcBasis, sign:'+', subCategory:'', statistical:false});
+  const preset = CATEGORY_PRESETS[s.category];
+  const overlay = el(`<div class="modal-overlay"><div class="modal wide">
+    <div class="modal-head"><div><h2>Add Custom PO Condition</h2><p>Category is the master switch — it presets sign, vendor rules, capitalisation, and tax treatment. All presets stay overridable except sign for statutory/discount/deduction conditions.</p></div><button class="modal-close" id="cClose">✕</button></div>
+    <div class="modal-body">
+      <div class="section-title">1 · Identity</div>
+      <div class="grid2">
+        <div class="field"><label>Condition Code *</label><input id="cCode" placeholder="FRT-OCEAN" value="${s.code}"/><div class="hint">Stable machine key — immutable after first PO use.</div></div>
+        <div class="field"><label>Condition Name *</label><input id="cName" placeholder="Ocean Freight" value="${s.name}"/></div>
+        <div class="field"><label>Category *</label><select id="cCat">${Object.keys(CATEGORY_LABELS).map(k=>`<option value="${k}" ${s.category===k?'selected':''}>${CATEGORY_LABELS[k]}</option>`).join('')}</select></div>
+        <div class="field"><label>Sub-category</label><select id="cSubCat"><option value="">Select sub-category</option>${SUBCATEGORY_OPTIONS[s.category].map(v=>`<option value="${v}" ${s.subCategory===v?'selected':''}>${v}</option>`).join('')}</select>
+          <div class="hint">Reporting rollup — drives spend analytics. Options are filtered by Category.</div></div>
+      </div>
+      <div class="section-title">2 · Calculation</div>
+      <div class="grid2">
+        <div class="field"><label>Calculation Basis *</label><select id="cBasis">${Object.keys(BASIS_LABELS).map(k=>`<option value="${k}" ${s.calcBasis===k?'selected':''}>${BASIS_LABELS[k]}</option>`).join('')}</select></div>
+        <div class="field"><label>${BASIS_RATE_LABEL[s.calcBasis]}</label><input type="number" placeholder="0.00"/></div>
+        <div class="field"><label>Sign *</label><div style="padding:10px 13px;background:var(--slate-bg);border-radius:10px;font-size:13px;display:flex;align-items:center;gap:8px;">
+          <span style="display:inline-flex;width:22px;height:22px;border-radius:6px;align-items:center;justify-content:center;font-weight:700;background:${s.sign==='-'?'var(--rose-bg)':'var(--emerald-bg)'};color:${s.sign==='-'?'var(--rose)':'var(--emerald)'}">${s.sign}</span>
+          Locked by category (${CATEGORY_LABELS[s.category]})</div></div>
+        <div class="field"><label>Rounding Rule *</label><select><option>Normal — nearest whole unit</option><option>Round up</option><option>Round down</option><option>None</option></select></div>
+        <div class="field"><label>Statistical</label>
+          <button type="button" id="cStatToggle" style="width:44px;height:24px;border:none;border-radius:99px;position:relative;cursor:pointer;background:${s.statistical?'var(--indigo)':'var(--line)'};">
+            <span style="position:absolute;top:3px;${s.statistical?'right:3px':'left:3px'};width:18px;height:18px;background:#fff;border-radius:50%;"></span>
+          </button>
+          <div class="hint">If on, the condition shows on the PO for visibility but is excluded from the PO total and vendor payable — for cash discount, rebate accruals, informational charges.</div>
+        </div>
+      </div>
+      <div class="section-title">3 · Tax</div>
+      <div class="grid2">
+        <div class="field"><label>Code Type *</label><select><option ${preset.calcBasis&&s.category==='LOGI'?'':''}>HSN — Goods</option><option>SAC — Services</option></select></div>
+        <div class="field"><label>GST Treatment *</label><select><option>Deductible</option><option>Non-deductible</option><option>RCM</option><option>Exempt</option><option>Nil-rated</option></select></div>
+      </div>
+      <div class="section-title">4 · Vendor & Ownership</div>
+      <div class="grid2">
+        <div class="field"><label>Default Vendor</label><select><option>None</option>${VENDORS.map(v=>`<option>${v.name}</option>`).join('')}</select></div>
+        <div class="field"><label>Vendor Rule *</label><div style="padding:10px 13px;background:var(--slate-bg);border-radius:10px;font-size:13px;">${preset.vendorRule.replace(/_/g,' ')}</div></div>
+      </div>
+      <div class="section-title">5 · Advanced Settings (preview)</div>
+      <div class="grid2">
+        <div class="field"><label>Sequence No.</label><input type="number" value="${preset.seq[0]}"/></div>
+        <div class="field"><label>Include in Item Landed Cost</label><div style="padding:10px 13px;background:var(--slate-bg);border-radius:10px;font-size:13px;">${preset.capitalise?'Yes (default)':'No (default)'}</div></div>
+      </div>
+      <div class="footnote">This is the condensed Artifact build of the full Condition Master form — Sections 1–4 plus a preview of Section 5. The local prototype (React + TypeScript project delivered alongside this) implements all 26 fields from PRD §4, live validation (M1–M8), slab tables, and the full Advanced Settings accordion.</div>
+    </div>
+    <div class="modal-foot"><span style="font-size:12px;color:var(--ink-faint);margin-right:auto;align-self:center;">Version 1</span><button class="btn btn-secondary" id="cCancel">Cancel</button><button class="btn btn-primary" id="cSave">Add Condition</button></div>
+  </div></div>`);
+  overlay.addEventListener('click',(e)=>{if(e.target===overlay){state.cmFormOpen=false; renderConditionMasterForm._state=null; render();}});
+  overlay.querySelector('#cClose').addEventListener('click',()=>{state.cmFormOpen=false; renderConditionMasterForm._state=null; render();});
+  overlay.querySelector('#cCancel').addEventListener('click',()=>{state.cmFormOpen=false; renderConditionMasterForm._state=null; render();});
+  overlay.querySelector('#cCode').addEventListener('input',(e)=>{s.code=e.target.value.toUpperCase();});
+  overlay.querySelector('#cName').addEventListener('input',(e)=>{s.name=e.target.value;});
+  overlay.querySelector('#cCat').addEventListener('change',(e)=>{
+    s.category=e.target.value; s.sign=CATEGORY_PRESETS[s.category].sign; s.calcBasis=CATEGORY_PRESETS[s.category].calcBasis;
+    if(!SUBCATEGORY_OPTIONS[s.category].includes(s.subCategory)) s.subCategory='';
+    render();
+  });
+  overlay.querySelector('#cSubCat').addEventListener('change',(e)=>{s.subCategory=e.target.value;});
+  overlay.querySelector('#cBasis').addEventListener('change',(e)=>{s.calcBasis=e.target.value; render();});
+  overlay.querySelector('#cStatToggle').addEventListener('click',()=>{s.statistical=!s.statistical; render();});
+  overlay.querySelector('#cSave').addEventListener('click',()=>{
+    if(!s.code||!s.name) return;
+    state.cmList = [...state.cmList, master(s.code,s.name,s.category,{subCategory:s.subCategory, statistical:s.statistical})];
+    state.cmFormOpen=false; renderConditionMasterForm._state=null; render();
+  });
+  return overlay;
+}
+
+render();
+</script>
