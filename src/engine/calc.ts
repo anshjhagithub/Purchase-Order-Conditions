@@ -1,16 +1,23 @@
 import type {
   AppliedCondition,
+  CalculationRule,
   CategoryCode,
   DistributionBasis,
+  FormulaRule,
   POLine,
   PurchaseOrder,
   RoundingRule,
+  RuleClause,
+  RuleField,
+  SelectedStep,
+  SlabTier,
   Vendor,
 } from '../types';
+import { resolveFieldValue as resolveFieldValueImpl } from './ruleFields';
 
-// Sentinel used inside AppliedCondition.calculateOnCodes to represent
-// "line base value" as one of the selectable steps in a Calculate-On chain
-// (PRD §5.2 / §6 — "Base + 10,20,30" vs "50 only").
+// Sentinel used inside AppliedCondition.calculateOnCodes (legacy Calculate-On model)
+// and SelectedStep.source === 'BASE' (current rule model) to represent "line base
+// value" as one selectable step in a Calculate-On chain.
 export const BASE_STEP = 'BASE';
 
 const UNION_TERRITORIES = new Set([
@@ -45,6 +52,16 @@ export interface ConditionCalcContext {
   unitWeightKg: number;
   unitVolumeCbm: number;
   priorAmounts: Record<string, number>; // conditionCode -> already-computed signed amount
+  priorBases?: Record<string, number>; // conditionCode -> calc base that condition used
+  // Attribute snapshot for CONDITIONAL-rule field resolution (engine/ruleFields.ts).
+  // All optional so existing call sites that only care about the numeric driver fields
+  // (e.g. GRNTab's qty-variance recompute) don't need to change.
+  poBaseAmount?: number;
+  incoterm?: string;
+  vendorGroup?: string;
+  entityId?: string;
+  currency?: string;
+  deliveryState?: string;
 }
 
 export interface ComputedConditionLine extends AppliedCondition {
@@ -63,24 +80,371 @@ export interface ComputedConditionLine extends AppliedCondition {
   ctxQty: number;
   ctxUnitWeightKg: number;
   ctxUnitVolumeCbm: number;
+  // Set by the dispatcher for BASE/DIRECT/CONDITIONAL rule modes — the specific formula
+  // that actually fired (for CONDITIONAL, whichever of THEN/ELSE matched) — purely for
+  // describeCalculation()'s human-readable text; not consulted by the calc logic itself.
+  effectiveFormula?: FormulaRule;
+  conditionalBranch?: 'THEN' | 'ELSE';
+  // True when a Minimum/Maximum Calculated Amount clamp changed the raw result.
+  chargeClamped?: boolean;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Dependency graph — condition order is derived purely from which condition
+// codes a condition's rule *references*, never from a stored sequence number.
+// ─────────────────────────────────────────────────────────────────────────
+
+type DependencySource = Pick<AppliedCondition, 'calculationMode' | 'calculationRule' | 'calculateOn' | 'calculateOnCodes'>;
+
+export function dependenciesOf(cond: DependencySource): string[] {
+  if (cond.calculationMode && cond.calculationRule) {
+    const rule = cond.calculationRule;
+    if (rule.mode === 'SELECTED_CONDITIONS') {
+      return rule.selected.steps.filter((s) => s.source === 'CONDITION' && s.conditionCode).map((s) => s.conditionCode!);
+    }
+    if (rule.mode === 'CONDITIONAL') {
+      return rule.conditional.clauses.filter((c) => c.field.source === 'CONDITION').map((c) => c.field.field);
+    }
+    return [];
+  }
+  // Legacy Calculate-On (no rule model on this record yet) — same edges as before.
+  return cond.calculateOn === 'SELECTED' ? cond.calculateOnCodes.filter((c) => c !== BASE_STEP) : [];
+}
+
+// Orders a set of conditions (one line's, or one PO's header set) so that every
+// condition is evaluated after everything it references. No sequence number is
+// consulted to decide *what depends on what* — only the rule's own references
+// (dependenciesOf). Independent conditions (no reference to one another) are
+// ordered alphabetically by conditionCode purely for a stable, readable display —
+// that ordering never overrides an actual dependency edge.
+export function orderByDependency<T extends AppliedCondition>(conditions: T[]): T[] {
+  const byCodeAlpha = [...conditions].sort((a, b) => a.conditionCode.localeCompare(b.conditionCode));
+  const codes = new Set(conditions.map((c) => c.conditionCode));
+  const graph = new Map<string, string[]>();
+
+  try {
+    for (const cond of conditions) {
+      const edges: string[] = [];
+      for (const dep of dependenciesOf(cond)) {
+        if (dep === cond.conditionCode) {
+          throw new Error(`"${cond.conditionCode}" cannot depend on itself.`);
+        }
+        if (!codes.has(dep)) {
+          // Referenced condition isn't part of this evaluation set (e.g. applied to
+          // a different line) — nothing to order against here; computeConditionAmount
+          // already treats a missing priorAmounts entry as 0.
+          continue;
+        }
+        edges.push(dep);
+      }
+      graph.set(cond.conditionCode, edges);
+    }
+
+    const WHITE = 0,
+      GRAY = 1,
+      BLACK = 2;
+    const state = new Map<string, number>();
+    for (const code of graph.keys()) state.set(code, WHITE);
+    const path: string[] = [];
+
+    const visit = (code: string) => {
+      state.set(code, GRAY);
+      path.push(code);
+      for (const dep of graph.get(code) ?? []) {
+        const depState = state.get(dep);
+        if (depState === GRAY) {
+          throw new Error(`Circular calculation dependency detected: ${[...path.slice(path.indexOf(dep)), dep].join(' → ')}`);
+        }
+        if (depState === WHITE) visit(dep);
+      }
+      path.pop();
+      state.set(code, BLACK);
+    };
+    for (const code of graph.keys()) {
+      if (state.get(code) === WHITE) visit(code);
+    }
+  } catch (err) {
+    console.warn('[PO condition engine] falling back to alphabetical order:', err instanceof Error ? err.message : err);
+    return byCodeAlpha;
+  }
+
+  const byCode = new Map(conditions.map((c) => [c.conditionCode, c]));
+  // Deterministic base iteration order = code, so independent conditions keep a
+  // stable relative order; dependency edges still force dependents last.
+  const sortedCodes = byCodeAlpha.map((c) => c.conditionCode);
+  const visited = new Set<string>();
+  const ordered: T[] = [];
+  const visitOrder = (code: string) => {
+    if (visited.has(code)) return;
+    visited.add(code);
+    for (const dep of graph.get(code) ?? []) visitOrder(dep);
+    ordered.push(byCode.get(code)!);
+  };
+  for (const code of sortedCodes) visitOrder(code);
+  return ordered;
+}
+
+// Detects a circular dependency that WOULD be created by saving `candidate` (used at
+// Condition Master save-time, before Sequence No. existed as a safety net). Runs the
+// same DFS as orderByDependency but across the full master list with `candidate`
+// substituted in, and throws a human-readable message naming the cycle.
+export function detectCircularDependency(
+  candidate: { code: string } & DependencySource,
+  allMasters: ({ code: string } & DependencySource)[]
+): string | null {
+  const byCode = new Map(allMasters.map((m) => [m.code, m]));
+  byCode.set(candidate.code, candidate);
+
+  const state = new Map<string, number>(); // 0 unvisited, 1 in-progress, 2 done
+  const path: string[] = [];
+  let cycleMessage: string | null = null;
+
+  const visit = (code: string) => {
+    if (cycleMessage) return;
+    const st = state.get(code) ?? 0;
+    if (st === 2) return;
+    if (st === 1) {
+      const start = path.indexOf(code);
+      const cycle = [...path.slice(start), code];
+      cycleMessage = `Cannot save this condition because it creates a circular dependency with ${cycle.filter((c) => c !== candidate.code)[0] ?? cycle[1] ?? code} (${cycle.join(' → ')}).`;
+      return;
+    }
+    state.set(code, 1);
+    path.push(code);
+    const cond = byCode.get(code);
+    if (cond) {
+      for (const dep of dependenciesOf(cond)) {
+        if (dep === code) {
+          cycleMessage = `Cannot save this condition because it references itself.`;
+          break;
+        }
+        visit(dep);
+        if (cycleMessage) break;
+      }
+    }
+    path.pop();
+    state.set(code, 2);
+  };
+
+  visit(candidate.code);
+  return cycleMessage;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Rule evaluation — BASE / DIRECT / SELECTED_CONDITIONS / CONDITIONAL / SLAB /
+// CUMULATIVE. Every mode reduces to the same output shape, { raw, calcBase },
+// before the shared sign/min-max/rounding/tax pipeline in computeConditionAmount.
+// ─────────────────────────────────────────────────────────────────────────
+
+function evaluateFormula(f: FormulaRule, ctx: ConditionCalcContext): { raw: number; calcBase: number } {
+  switch (f.type) {
+    case 'FIXED':
+      return { raw: f.value, calcBase: ctx.lineBaseValue };
+    case 'PERCENTAGE':
+      return { raw: (f.value / 100) * ctx.lineBaseValue, calcBase: ctx.lineBaseValue };
+    case 'RATE_X_QTY':
+      return { raw: f.value * ctx.lineQty, calcBase: ctx.lineBaseValue };
+    case 'RATE_X_WEIGHT':
+      return { raw: f.value * (ctx.lineQty * ctx.unitWeightKg), calcBase: ctx.lineBaseValue };
+    case 'RATE_X_VOLUME':
+      return { raw: f.value * (ctx.lineQty * ctx.unitVolumeCbm), calcBase: ctx.lineBaseValue };
+  }
+}
+
+function evaluateSelectedSteps(steps: SelectedStep[], ctx: ConditionCalcContext): number {
+  return steps.reduce((sum, step) => {
+    const stepValue =
+      step.source === 'BASE'
+        ? ctx.lineBaseValue
+        : step.valueKind === 'CONDITION_BASE'
+          ? (ctx.priorBases?.[step.conditionCode ?? ''] ?? 0)
+          : (ctx.priorAmounts[step.conditionCode ?? ''] ?? 0);
+    const weighted = stepValue * ((step.percentage ?? 100) / 100);
+    return step.operator === '-' ? sum - weighted : sum + weighted;
+  }, 0);
+}
+
+// A SELECTED_CONDITIONS rule only builds the *base*; the condition's own Calculation
+// Basis + Rate (Section 2 of the form — unchanged by this rule model) still decides
+// how that base becomes an amount, exactly as the legacy "Calculate On -> Selected
+// steps" behaviour always worked.
+function applyLegacyBasisToBase(
+  cond: Pick<AppliedCondition, 'calcBasis' | 'rate'>,
+  calcBase: number,
+  ctx: ConditionCalcContext
+): { raw: number; calcBase: number } {
+  switch (cond.calcBasis) {
+    case 'FIXED_PER_PO':
+    case 'FIXED_PER_LINE':
+      return { raw: cond.rate, calcBase };
+    case 'RATE_X_QTY':
+      return { raw: cond.rate * ctx.lineQty, calcBase };
+    case 'RATE_X_WEIGHT':
+      return { raw: cond.rate * (ctx.lineQty * ctx.unitWeightKg), calcBase };
+    case 'RATE_X_VOLUME':
+      return { raw: cond.rate * (ctx.lineQty * ctx.unitVolumeCbm), calcBase };
+    case 'PCT_OF_LINE_BASE':
+      return { raw: (cond.rate / 100) * ctx.lineBaseValue, calcBase };
+    case 'PCT_OF_SELECTED_BASE':
+    default:
+      return { raw: (cond.rate / 100) * calcBase, calcBase };
+  }
+}
+
+function resolveFieldValue(field: RuleField, ctx: ConditionCalcContext): string | number | undefined {
+  return resolveFieldValueImpl(field, ctx);
+}
+
+function compareValues(left: string | number | undefined, operator: RuleClause['operator'], value: RuleClause['value']): boolean {
+  switch (operator) {
+    case 'IS_EMPTY':
+      return left === undefined || left === '' || left === null;
+    case 'IS_NOT_EMPTY':
+      return !(left === undefined || left === '' || left === null);
+    case 'IN':
+      return String(value ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .includes(String(left ?? ''));
+    case 'NOT_IN':
+      return !String(value ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .includes(String(left ?? ''));
+    case 'BETWEEN': {
+      if (!Array.isArray(value)) return false;
+      const [a, b] = value;
+      const n = Number(left);
+      return n >= Number(a) && n <= Number(b);
+    }
+    case '=':
+      return String(left ?? '') === String(value ?? '');
+    case '!=':
+      return String(left ?? '') !== String(value ?? '');
+    case '>':
+      return Number(left) > Number(value);
+    case '<':
+      return Number(left) < Number(value);
+    case '>=':
+      return Number(left) >= Number(value);
+    case '<=':
+      return Number(left) <= Number(value);
+    default:
+      return false;
+  }
+}
+
+// Left-to-right fold of AND/OR — no operator precedence — intentionally: the UI
+// is a flat chain of clauses (§13/§18 "no formula language"), not an expression tree.
+export function evaluateClauses(clauses: RuleClause[], ctx: ConditionCalcContext): boolean {
+  if (clauses.length === 0) return true;
+  let result = compareValues(resolveFieldValue(clauses[0].field, ctx), clauses[0].operator, clauses[0].value);
+  for (let i = 1; i < clauses.length; i++) {
+    const join = clauses[i - 1].join ?? 'AND';
+    const cur = compareValues(resolveFieldValue(clauses[i].field, ctx), clauses[i].operator, clauses[i].value);
+    result = join === 'OR' ? result || cur : result && cur;
+  }
+  return result;
+}
+
+function matchTier(tiers: SlabTier[], driver: number): SlabTier | undefined {
+  return tiers.find((t) => driver >= t.from && (t.to == null || driver < t.to)) ?? tiers[tiers.length - 1];
+}
+
+function tierAmount(tier: SlabTier | undefined, driver: number, base: number): number {
+  if (!tier) return 0;
+  return tier.rateType === 'PERCENTAGE' ? (tier.rate / 100) * base : tier.rate * driver;
+}
+
+function slabDriver(basis: string, ctx: ConditionCalcContext): number {
+  switch (basis) {
+    case 'QUANTITY':
+    case 'CUMULATIVE_QUANTITY':
+      return ctx.lineQty;
+    case 'WEIGHT':
+      return ctx.lineQty * ctx.unitWeightKg;
+    case 'VOLUME':
+      return ctx.lineQty * ctx.unitVolumeCbm;
+    case 'PO_AMOUNT':
+      return ctx.poBaseAmount ?? ctx.lineBaseValue;
+    case 'BASE_AMOUNT':
+    default:
+      return ctx.lineBaseValue;
+  }
+}
+
+// No historical/blanket-PO backend exists in this prototype — this is an explicit mock
+// per the spec's allowance ("actual historical data source may be mocked"). It always
+// returns 0 (current period only), which keeps CUMULATIVE rules exercising the same
+// tier-matching logic as SLAB while making the mock impossible to mistake for real data.
+function getCumulativeHistoryTotal(): number {
+  return 0;
+}
+
+function computeRuleRaw(cond: AppliedCondition, rule: CalculationRule, ctx: ConditionCalcContext): { raw: number; calcBase: number; formula?: FormulaRule; branch?: 'THEN' | 'ELSE' } {
+  switch (rule.mode) {
+    case 'BASE':
+      return { ...evaluateFormula(rule.base, ctx), formula: rule.base };
+    case 'DIRECT':
+      return { ...evaluateFormula(rule.direct, ctx), formula: rule.direct };
+    case 'SELECTED_CONDITIONS': {
+      const calcBase = evaluateSelectedSteps(rule.selected.steps, ctx);
+      return applyLegacyBasisToBase(cond, calcBase, ctx);
+    }
+    case 'CONDITIONAL': {
+      const matched = evaluateClauses(rule.conditional.clauses, ctx);
+      const branch: 'THEN' | 'ELSE' = matched || !rule.conditional.else ? 'THEN' : 'ELSE';
+      const formula = matched ? rule.conditional.then : (rule.conditional.else ?? rule.conditional.then);
+      return { ...evaluateFormula(formula, ctx), formula, branch };
+    }
+    case 'SLAB': {
+      const driver = slabDriver(rule.slab.basis, ctx);
+      const tier = matchTier(rule.slab.tiers, driver);
+      return { raw: tierAmount(tier, driver, driver), calcBase: driver };
+    }
+    case 'CUMULATIVE': {
+      const current = cumulativeCurrentDriver(rule.cumulative.basis, ctx);
+      const total = current + getCumulativeHistoryTotal();
+      const tier = matchTier(rule.cumulative.tiers, total);
+      return { raw: tierAmount(tier, current, ctx.lineBaseValue), calcBase: total };
+    }
+  }
+}
+
+function cumulativeCurrentDriver(basis: string, ctx: ConditionCalcContext): number {
+  switch (basis) {
+    case 'VALUE':
+      return ctx.lineBaseValue;
+    case 'WEIGHT':
+      return ctx.lineQty * ctx.unitWeightKg;
+    case 'VOLUME':
+      return ctx.lineQty * ctx.unitVolumeCbm;
+    case 'QUANTITY':
+    default:
+      return ctx.lineQty;
+  }
 }
 
 function matchSlabRow(cond: AppliedCondition, driver: number) {
-  // slabTable travels on the condition snapshot when present (P2 feature)
-  const table = (cond as any).slabTable as { from: number; to: number; rate: number }[] | undefined;
+  // Legacy Condition Master `slabTable` (from/to/rate, no open-ended `to`) — kept
+  // exactly as before for any condition saved before the SLAB rule mode existed.
+  const table = cond.slabTable as { from: number; to: number; rate: number }[] | undefined;
   if (!table || table.length === 0) return undefined;
   return table.find((r) => driver >= r.from && driver < r.to) ?? table[table.length - 1];
 }
 
-export function computeConditionAmount(
-  cond: AppliedCondition,
-  ctx: ConditionCalcContext
-): { amount: number; gstAmount: number; calcBase: number } {
+// Legacy Calculate-On path — byte-for-byte the original engine (calcBasis switch
+// fed by a plain weighted sum of calculateOnCodes) for any condition saved before
+// the calculationMode/calculationRule model existed. Left untouched so existing
+// Condition Masters and every seeded PO keep computing identically.
+function computeLegacyRaw(cond: AppliedCondition, ctx: ConditionCalcContext): { raw: number; calcBase: number } {
   const resolveCalcBase = () => {
     if (cond.calculateOn === 'LINE_BASE') return ctx.lineBaseValue;
+    const weights = cond.calculateOnWeights ?? {};
     return cond.calculateOnCodes.reduce((sum, code) => {
-      if (code === BASE_STEP) return sum + ctx.lineBaseValue;
-      return sum + (ctx.priorAmounts[code] ?? 0);
+      const stepAmount = code === BASE_STEP ? ctx.lineBaseValue : (ctx.priorAmounts[code] ?? 0);
+      const weightPct = weights[code] ?? 100;
+      return sum + stepAmount * (weightPct / 100);
     }, 0);
   };
 
@@ -115,7 +479,31 @@ export function computeConditionAmount(
     }
   }
 
-  const signed = cond.sign === '-' ? -Math.abs(raw) : Math.abs(raw);
+  return { raw, calcBase };
+}
+
+export function computeConditionAmount(
+  cond: AppliedCondition,
+  ctx: ConditionCalcContext
+): { amount: number; gstAmount: number; calcBase: number; effectiveFormula?: FormulaRule; conditionalBranch?: 'THEN' | 'ELSE'; chargeClamped?: boolean } {
+  const { raw, calcBase, formula, branch } =
+    cond.calculationMode && cond.calculationRule
+      ? computeRuleRaw(cond, cond.calculationRule, ctx)
+      : { ...computeLegacyRaw(cond, ctx), formula: undefined, branch: undefined };
+
+  // Order (spec): 1) calc base  2) raw amount  3) min/max charge  4) sign  5) rounding  6) tax.
+  let magnitude = Math.abs(raw);
+  let chargeClamped = false;
+  if (cond.minChargeAmount != null && magnitude < cond.minChargeAmount) {
+    magnitude = cond.minChargeAmount;
+    chargeClamped = true;
+  }
+  if (cond.maxChargeAmount != null && magnitude > cond.maxChargeAmount) {
+    magnitude = cond.maxChargeAmount;
+    chargeClamped = true;
+  }
+
+  const signed = cond.sign === '-' ? -magnitude : magnitude;
   const amount = roundAmount(signed, cond.rounding);
 
   const gstBase = Math.abs(amount);
@@ -124,7 +512,7 @@ export function computeConditionAmount(
       ? 0
       : Math.round(gstBase * (cond.gstRate / 100) * 100) / 100;
 
-  return { amount, gstAmount, calcBase };
+  return { amount, gstAmount, calcBase, effectiveFormula: formula, conditionalBranch: branch, chargeClamped };
 }
 
 function jurisdictionFor(
@@ -145,7 +533,7 @@ function jurisdictionFor(
 
 function computeWithJurisdiction(
   cond: AppliedCondition,
-  r: { amount: number; gstAmount: number; calcBase: number },
+  r: { amount: number; gstAmount: number; calcBase: number; effectiveFormula?: FormulaRule; conditionalBranch?: 'THEN' | 'ELSE'; chargeClamped?: boolean },
   vendors: Vendor[],
   deliveryState: string,
   ctx: ConditionCalcContext
@@ -181,6 +569,9 @@ function computeWithJurisdiction(
     ctxQty: ctx.lineQty,
     ctxUnitWeightKg: ctx.unitWeightKg,
     ctxUnitVolumeCbm: ctx.unitVolumeCbm,
+    effectiveFormula: r.effectiveFormula,
+    conditionalBranch: r.conditionalBranch,
+    chargeClamped: r.chargeClamped,
   };
 }
 
@@ -190,11 +581,16 @@ export interface LineComputation {
   items: ComputedConditionLine[];
 }
 
-export function computeLine(line: POLine, vendors: Vendor[], deliveryState: string): LineComputation {
+// `po` supplies delivery state (GST jurisdiction) plus the attribute snapshot a
+// CONDITIONAL rule can reference (PO Base Amount, Incoterm, Vendor Group, Entity, ...).
+export function computeLine(line: POLine, vendors: Vendor[], po: PurchaseOrder): LineComputation {
   const lineBaseValue = Math.round(line.qty * line.unitPrice * 100) / 100;
-  const sorted = [...line.conditions].sort((a, b) => a.sequence - b.sequence);
+  const sorted = orderByDependency(line.conditions);
   const priorAmounts: Record<string, number> = {};
+  const priorBases: Record<string, number> = {};
   const items: ComputedConditionLine[] = [];
+  const poBaseAmount = po.lines.reduce((s, l) => s + l.qty * l.unitPrice, 0);
+  const vendorGroup = vendors.find((v) => v.id === po.vendorId)?.vendorGroup;
   for (const cond of sorted) {
     const ctx: ConditionCalcContext = {
       lineBaseValue,
@@ -202,10 +598,18 @@ export function computeLine(line: POLine, vendors: Vendor[], deliveryState: stri
       unitWeightKg: line.unitWeightKg,
       unitVolumeCbm: line.unitVolumeCbm,
       priorAmounts,
+      priorBases,
+      poBaseAmount,
+      incoterm: po.incoterm,
+      vendorGroup,
+      entityId: po.entityId,
+      currency: po.currency,
+      deliveryState: po.deliveryState,
     };
     const r = computeConditionAmount(cond, ctx);
     priorAmounts[cond.conditionCode] = r.amount;
-    items.push(computeWithJurisdiction(cond, r, vendors, deliveryState, ctx));
+    priorBases[cond.conditionCode] = r.calcBase;
+    items.push(computeWithJurisdiction(cond, r, vendors, po.deliveryState, ctx));
   }
   return { line, lineBaseValue, items };
 }
@@ -218,10 +622,12 @@ export interface HeaderComputation {
 
 export function computeHeaderCascade(po: PurchaseOrder, vendors: Vendor[]): HeaderComputation {
   const totalBaseValue = po.lines.reduce((s, l) => s + l.qty * l.unitPrice, 0);
-  const sorted = [...po.headerConditions].sort((a, b) => a.sequence - b.sequence);
+  const sorted = orderByDependency(po.headerConditions);
   const priorAmounts: Record<string, number> = {};
+  const priorBases: Record<string, number> = {};
   const items: ComputedConditionLine[] = [];
   const distribution: Record<string, Record<string, number>> = {};
+  const vendorGroup = vendors.find((v) => v.id === po.vendorId)?.vendorGroup;
 
   for (const cond of sorted) {
     const affectedLines = po.lines.filter(
@@ -237,9 +643,17 @@ export function computeHeaderCascade(po: PurchaseOrder, vendors: Vendor[]): Head
       unitWeightKg: qtySum > 0 ? weightSum / qtySum : 0,
       unitVolumeCbm: qtySum > 0 ? volumeSum / qtySum : 0,
       priorAmounts,
+      priorBases,
+      poBaseAmount: totalBaseValue,
+      incoterm: po.incoterm,
+      vendorGroup,
+      entityId: po.entityId,
+      currency: po.currency,
+      deliveryState: po.deliveryState,
     };
     const r = computeConditionAmount(cond, ctx);
     priorAmounts[cond.conditionCode] = r.amount;
+    priorBases[cond.conditionCode] = r.calcBase;
     const computed = computeWithJurisdiction(cond, r, vendors, po.deliveryState, ctx);
     items.push(computed);
 
@@ -307,7 +721,7 @@ export interface POComputation {
 }
 
 export function computePO(po: PurchaseOrder, vendors: Vendor[]): POComputation {
-  const lineComputations = po.lines.map((l) => computeLine(l, vendors, po.deliveryState));
+  const lineComputations = po.lines.map((l) => computeLine(l, vendors, po));
   const headerComputation = computeHeaderCascade(po, vendors);
 
   const baseAmount = lineComputations.reduce((s, lc) => s + lc.lineBaseValue, 0);
@@ -385,14 +799,43 @@ export function computePO(po: PurchaseOrder, vendors: Vendor[]): POComputation {
 }
 
 // Human-readable "5% × ₹1,00,000" style string for the cascade preview and calculation
-// info popover (20-domain/worked-examples.md format). Reads item.ctxQty/ctxUnitWeightKg/
-// ctxUnitVolumeCbm — the driver quantities computeWithJurisdiction actually multiplied
-// against — rather than the condition's own qty field (RATE_X_QTY/WEIGHT/VOLUME ignore it).
+// info popover. Reads item.ctxQty/ctxUnitWeightKg/ctxUnitVolumeCbm — the driver
+// quantities computeWithJurisdiction actually multiplied against — rather than the
+// condition's own qty field (RATE_X_QTY/WEIGHT/VOLUME ignore it).
 export function describeCalculation(
   item: ComputedConditionLine,
   uomName: string | undefined,
   currency: string
 ): string {
+  if (item.calculationMode && item.calculationRule) {
+    const rule = item.calculationRule;
+    if (rule.mode === 'SLAB' || rule.mode === 'CUMULATIVE') {
+      return `Tier band × ${formatCurrency(item.calcBaseUsed, currency)}`;
+    }
+    if (rule.mode === 'SELECTED_CONDITIONS') {
+      return `${item.rate}% × ${formatCurrency(item.calcBaseUsed, currency)}`;
+    }
+    const f = item.effectiveFormula;
+    const prefix = rule.mode === 'CONDITIONAL' ? `IF ${item.conditionalBranch === 'ELSE' ? 'false → ELSE: ' : 'true → THEN: '}` : '';
+    if (!f) return prefix || '—';
+    switch (f.type) {
+      case 'FIXED':
+        return `${prefix}Flat ${formatCurrency(f.value, currency)}`;
+      case 'PERCENTAGE':
+        return `${prefix}${f.value}% × ${formatCurrency(item.calcBaseUsed, currency)}`;
+      case 'RATE_X_QTY':
+        return `${prefix}${f.value} × ${item.ctxQty}${uomName ? ' ' + uomName : ''}`;
+      case 'RATE_X_WEIGHT': {
+        const total = item.ctxQty * item.ctxUnitWeightKg;
+        return `${prefix}${f.value} × ${total.toLocaleString('en-IN', { maximumFractionDigits: 2 })}${uomName ? ' ' + uomName : ' KG'}`;
+      }
+      case 'RATE_X_VOLUME': {
+        const total = item.ctxQty * item.ctxUnitVolumeCbm;
+        return `${prefix}${f.value} × ${total.toLocaleString('en-IN', { maximumFractionDigits: 2 })}${uomName ? ' ' + uomName : ' CBM'}`;
+      }
+    }
+  }
+
   switch (item.calcBasis) {
     case 'FIXED_PER_PO':
     case 'FIXED_PER_LINE':

@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "calc:examples": "tsx src/engine/dag/examples.ts"
   },
   "dependencies": {
     "@headlessui/react": "^2.2.10",
@@ -27,6 +28,7 @@
     "playwright": "^1.62.1",
     "postcss": "^8.5.26",
     "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.13",
     "typescript": "~6.0.2",
     "vite": "^8.2.0"
   }

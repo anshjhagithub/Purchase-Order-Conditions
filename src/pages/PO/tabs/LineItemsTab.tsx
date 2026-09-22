@@ -44,7 +44,10 @@ export function LineItemsTab({ po }: { po: PurchaseOrder }) {
       }));
     }),
     ...comp.headerComputation.items.map((item) => ({ item, lineLabel: 'Whole PO', nameByCode: headerNameByCode })),
-  ].sort((a, b) => a.item.sequence - b.item.sequence);
+    // No Sequence No. to sort by — each scope (a line's own conditions, the header's own
+    // conditions) is already in dependency-resolved calculation order from computePO;
+    // this only gives a stable, readable order across the two concatenated scopes.
+  ].sort((a, b) => a.item.conditionCode.localeCompare(b.item.conditionCode));
 
   const handleRemoveCondition = (conditionName: string, conditionId: string) => {
     if (window.confirm(`Remove "${conditionName}" from this PO?`)) {
@@ -203,7 +206,6 @@ export function LineItemsTab({ po }: { po: PurchaseOrder }) {
           <table className="table-shell">
             <thead>
               <tr>
-                <th>Seq</th>
                 <th>Condition</th>
                 <th>Category</th>
                 <th>Line</th>
@@ -223,7 +225,6 @@ export function LineItemsTab({ po }: { po: PurchaseOrder }) {
             <tbody>
               {flatRows.map(({ item, lineLabel, nameByCode }) => (
                 <tr key={item.id}>
-                  <td>{item.sequence}</td>
                   <td className="font-medium text-slate-800">
                     <div className="flex items-center gap-1.5">
                       {item.conditionName}

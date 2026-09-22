@@ -94,6 +94,147 @@ export interface SlabRow {
   rate: number;
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Calculate-On rule model (replaces Sequence No.) — dependency order is
+// derived purely from which condition codes a rule *references*, never from
+// a stored execution-order number. See engine/calc.ts `dependenciesOf` /
+// `orderByDependency` for how a rule's references become graph edges, and
+// `getEffectiveRule` for how legacy calcBasis/calculateOn records (saved
+// before this model existed) are read as an equivalent rule with no data
+// migration required.
+// ─────────────────────────────────────────────────────────────────────────
+export type CalculationMode = 'BASE' | 'SELECTED_CONDITIONS' | 'DIRECT' | 'CONDITIONAL' | 'SLAB' | 'CUMULATIVE';
+
+export const CALCULATION_MODE_LABELS: Record<CalculationMode, string> = {
+  BASE: 'Base',
+  SELECTED_CONDITIONS: 'Selected Conditions',
+  DIRECT: 'Direct Calculation',
+  CONDITIONAL: 'Conditional Rule',
+  SLAB: 'Slab / Tier',
+  CUMULATIVE: 'Cumulative / Volume-based Rule',
+};
+
+// A single-formula amount — "2% of Base", "₹5,000 flat", "₹20 × Qty" — shared by
+// BASE mode, DIRECT mode, and the THEN/ELSE branches of a CONDITIONAL rule.
+export type FormulaType = 'PERCENTAGE' | 'FIXED' | 'RATE_X_QTY' | 'RATE_X_WEIGHT' | 'RATE_X_VOLUME';
+export const FORMULA_TYPE_LABELS: Record<FormulaType, string> = {
+  PERCENTAGE: '% of Base',
+  FIXED: 'Fixed Amount',
+  RATE_X_QTY: 'Rate × Quantity',
+  RATE_X_WEIGHT: 'Rate × Weight',
+  RATE_X_VOLUME: 'Rate × Volume',
+};
+export interface FormulaRule {
+  type: FormulaType;
+  value: number; // %, flat amount, or rate-per-unit depending on `type`
+  uomId?: string; // for RATE_X_QTY/WEIGHT/VOLUME
+}
+
+// One weighted term of a SELECTED_CONDITIONS sum: "+ 20% of BCD's Condition Amount".
+export type SelectedStepSource = 'BASE' | 'CONDITION';
+export type SelectedStepValueKind = 'CONDITION_AMOUNT' | 'CONDITION_BASE';
+export interface SelectedStep {
+  operator: '+' | '-';
+  source: SelectedStepSource;
+  conditionCode?: string; // required when source === 'CONDITION'
+  valueKind?: SelectedStepValueKind; // default 'CONDITION_AMOUNT' — never silently reads the configured rate
+  percentage: number; // weight %, default 100
+}
+export interface SelectedConditionsRule {
+  steps: SelectedStep[];
+}
+
+export type ComparisonOperator = '=' | '!=' | '>' | '<' | '>=' | '<=' | 'IN' | 'NOT_IN' | 'BETWEEN' | 'IS_EMPTY' | 'IS_NOT_EMPTY';
+export const COMPARISON_OPERATOR_LABELS: Record<ComparisonOperator, string> = {
+  '=': '=',
+  '!=': '≠',
+  '>': '>',
+  '<': '<',
+  '>=': '≥',
+  '<=': '≤',
+  IN: 'IN',
+  NOT_IN: 'NOT IN',
+  BETWEEN: 'BETWEEN',
+  IS_EMPTY: 'IS EMPTY',
+  IS_NOT_EMPTY: 'IS NOT EMPTY',
+};
+
+// Left-hand side of a conditional-rule clause. `field` is a key into the registry
+// in engine/ruleFields.ts (PO attribute, line attribute, or another condition's
+// calculated amount when source === 'CONDITION').
+export type RuleFieldSource = 'PO' | 'LINE' | 'CONDITION';
+export interface RuleField {
+  source: RuleFieldSource;
+  field: string; // registry key, or a condition code when source === 'CONDITION'
+}
+export interface RuleClause {
+  field: RuleField;
+  operator: ComparisonOperator;
+  value?: string | number | [string | number, string | number]; // BETWEEN uses a tuple
+  join?: 'AND' | 'OR'; // how this clause combines with the NEXT one in the list
+}
+export interface ConditionalRule {
+  clauses: RuleClause[];
+  then: FormulaRule;
+  else?: FormulaRule;
+}
+
+export type SlabRateType = 'PERCENTAGE' | 'FLAT_PER_UNIT';
+export interface SlabTier {
+  id: string;
+  from: number;
+  to: number | null; // null = open-ended ("1001+")
+  rateType: SlabRateType;
+  rate: number;
+}
+export type SlabBasis = 'QUANTITY' | 'CUMULATIVE_QUANTITY' | 'WEIGHT' | 'VOLUME' | 'BASE_AMOUNT' | 'PO_AMOUNT';
+export const SLAB_BASIS_LABELS: Record<SlabBasis, string> = {
+  QUANTITY: 'Quantity',
+  CUMULATIVE_QUANTITY: 'Cumulative Quantity',
+  WEIGHT: 'Weight',
+  VOLUME: 'Volume',
+  BASE_AMOUNT: 'Base Amount',
+  PO_AMOUNT: 'PO Amount',
+};
+export interface SlabRule {
+  basis: SlabBasis;
+  tiers: SlabTier[];
+}
+
+export type CumulativeBasis = 'QUANTITY' | 'VALUE' | 'WEIGHT' | 'VOLUME';
+export const CUMULATIVE_BASIS_LABELS: Record<CumulativeBasis, string> = {
+  QUANTITY: 'Cumulative Quantity',
+  VALUE: 'Cumulative Value',
+  WEIGHT: 'Cumulative Weight',
+  VOLUME: 'Cumulative Volume',
+};
+export type CumulativeScope = 'VENDOR' | 'CONTRACT' | 'BLANKET_PO' | 'MATERIAL' | 'MATERIAL_CATEGORY' | 'ENTITY' | 'PLANT' | 'PROJECT';
+export const CUMULATIVE_SCOPE_LABELS: Record<CumulativeScope, string> = {
+  VENDOR: 'Vendor',
+  CONTRACT: 'Contract',
+  BLANKET_PO: 'Blanket PO',
+  MATERIAL: 'Material',
+  MATERIAL_CATEGORY: 'Material Category',
+  ENTITY: 'Entity',
+  PLANT: 'Plant',
+  PROJECT: 'Project',
+};
+export interface CumulativeRule {
+  basis: CumulativeBasis;
+  scope: CumulativeScope;
+  // Current PO/line's own driver is added to a (currently mocked — see engine/calc.ts
+  // `getCumulativeHistoryTotal`) running total for the scope before tiers are matched.
+  tiers: SlabTier[];
+}
+
+export type CalculationRule =
+  | { mode: 'BASE'; base: FormulaRule }
+  | { mode: 'SELECTED_CONDITIONS'; selected: SelectedConditionsRule }
+  | { mode: 'DIRECT'; direct: FormulaRule }
+  | { mode: 'CONDITIONAL'; conditional: ConditionalRule }
+  | { mode: 'SLAB'; slab: SlabRule }
+  | { mode: 'CUMULATIVE'; cumulative: CumulativeRule };
+
 // ── Section 1: Identity ─────────────────────────────────────────────────
 // ── Section 2: Calculation ──────────────────────────────────────────────
 // ── Section 3: Tax ──────────────────────────────────────────────────────
@@ -136,15 +277,31 @@ export interface ConditionMaster {
   defaultConfirmationOwner?: string;
 
   // 5 Advanced
-  sequence: number;
+  // No Sequence No. field — calculation order is derived automatically from which
+  // condition codes each condition's rule references (engine/calc.ts `orderByDependency`).
+  calculationMode?: CalculationMode; // undefined = legacy record, see getEffectiveRule()
+  calculationRule?: CalculationRule;
+  // Legacy Calculate-On fields — still read by getEffectiveRule() for any Condition Master
+  // saved before the rule-builder existed, so old data keeps computing identically without
+  // a migration step. The form no longer writes these directly; new/edited conditions get
+  // calculationMode + calculationRule instead. (`calcBasis` is declared in §2 above.)
   calculateOn: 'LINE_BASE' | 'SELECTED';
-  calculateOnCodes: string[]; // lower-sequence condition codes
+  calculateOnCodes: string[];
+  calculateOnWeights?: Record<string, number>;
+  slabTable: SlabRow[];
+  // Post-calculation clamp, applied to the raw amount's magnitude before sign/rounding —
+  // distinct from Min Value / Max Value below, which validate the *rate/entry* on the PO form.
+  minChargeAmount?: number;
+  maxChargeAmount?: number;
   capitalise: boolean;
   allowedLevel: AllowedLevel;
   distributionBasis?: DistributionBasis;
   requiresServiceConfirmation: boolean;
   autoConfirmOnMainGrn: boolean;
   confirmationOnPartialGrn: ConfirmationMode;
+  // Gates condition-GRN creation independently of Requires Service Confirmation: when true,
+  // a GRN for this condition cannot be created until the underlying PO line has an item GRN.
+  lineItemGrnRequired: boolean;
   rateEditableOnPo: boolean;
   vendorEditableOnPo: boolean;
   minValue?: number;
@@ -158,7 +315,6 @@ export interface ConditionMaster {
   requiresAttachment: boolean;
   reversible: boolean;
   releaseTrigger?: ReleaseTrigger;
-  slabTable: SlabRow[];
   indexReferenceId?: string;
   indexRevisionFrequency?: string;
   indexRevisionLag?: number;
@@ -234,10 +390,18 @@ export interface AppliedCondition {
   level: ConditionLevel;
   lineId?: string; // set when level === 'LINE'
   applyToLineIds?: string[]; // for header conditions distributed across specific lines
-  sequence: number;
+  // No Sequence No. — see ConditionMaster. Snapshotted from the master at add-time,
+  // same as every other calc field below (so a later master edit doesn't retroactively
+  // change amounts already on this PO).
+  calculationMode?: CalculationMode;
+  calculationRule?: CalculationRule;
   calcBasis: CalculationBasis;
   calculateOn: 'LINE_BASE' | 'SELECTED';
   calculateOnCodes: string[];
+  calculateOnWeights?: Record<string, number>; // code -> weight %, default 100 (see ConditionMaster)
+  slabTable?: SlabRow[];
+  minChargeAmount?: number;
+  maxChargeAmount?: number;
   sign: Sign;
   rate: number; // rate / % / amount as entered on the PO
   qty: number;
@@ -256,6 +420,7 @@ export interface AppliedCondition {
   requiresServiceConfirmation: boolean;
   autoConfirmOnMainGrn: boolean;
   confirmationMode: ConfirmationMode;
+  lineItemGrnRequired: boolean;
   status: AppliedConditionStatus;
   confirmedPct: number; // 0-100
   notes?: string;
@@ -306,6 +471,7 @@ export interface PurchaseOrder {
   owner: string;
   lines: POLine[];
   headerConditions: AppliedCondition[];
+  invoiceClaims?: InvoiceClaim[];
   createdAt: string;
   createdBy: string;
   // List-view / spend-classification fields (Dashboard table) — distinct from a
@@ -314,6 +480,35 @@ export interface PurchaseOrder {
   submittedBy: string;
   spendSuperCategory: string;
   spendCategory: string;
+}
+
+// ── Invoice matching (vendor-wise, per PRD §7.6 / condition_invoice_claim) ─
+// One claim per vendor payable (material vendor's base+same-vendor conditions,
+// or a condition-vendor's own conditions e.g. freight/CHA/insurance). Kept
+// separate from AppliedCondition.status (GRN-side confirmation) — a claim can
+// only be raised once its underlying conditions are confirmed, or parked
+// with ON_HOLD_GRN otherwise.
+export type InvoiceClaimStatus = 'MATCHED' | 'VARIANCE_PENDING' | 'APPROVED' | 'ON_HOLD_GRN';
+export const INVOICE_CLAIM_STATUS_LABELS: Record<InvoiceClaimStatus, string> = {
+  MATCHED: 'Matched',
+  VARIANCE_PENDING: 'Variance — pending approval',
+  APPROVED: 'Variance approved',
+  ON_HOLD_GRN: 'On hold — awaiting GRN',
+};
+
+export interface InvoiceClaim {
+  id: string;
+  vendorId: string;
+  vendorName: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  plannedAmount: number; // snapshot of computed vendor payable when raised
+  claimedAmount: number;
+  varianceAmount: number;
+  variancePct: number;
+  status: InvoiceClaimStatus;
+  spansOtherPOs: boolean; // consolidated invoice covering multiple POs from this vendor
+  conditionIds: string[]; // AppliedCondition ids this claim's amount is matched against
 }
 
 export interface ConditionBundle {

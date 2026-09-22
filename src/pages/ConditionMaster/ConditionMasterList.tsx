@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronLeft, Plus, Pencil, Search, RotateCcw, Trash2, Trash, Undo2 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
-import { CATEGORY_LABELS, CALC_BASIS_LABELS, type CategoryCode, type ConditionMaster } from '../../types';
+import { CATEGORY_LABELS, CALC_BASIS_LABELS, CALCULATION_MODE_LABELS, type CategoryCode, type ConditionMaster } from '../../types';
 import { CategoryBadge, StatusBadge } from '../../components/ui/Badge';
 import { ConditionMasterForm } from './ConditionMasterForm';
 
@@ -113,7 +113,7 @@ export function ConditionMasterList() {
               <th>Category</th>
               <th>Calculation Basis</th>
               <th>Sign</th>
-              <th>Sequence</th>
+              <th>Calculate On</th>
               <th>Vendor Rule</th>
               <th>Capitalise</th>
               <th>Level</th>
@@ -140,7 +140,7 @@ export function ConditionMasterList() {
                     {c.sign}
                   </span>
                 </td>
-                <td>{c.sequence}</td>
+                <td className="text-[12px] text-slate-500">{CALCULATION_MODE_LABELS[c.calculationMode ?? (c.calculateOn === 'SELECTED' ? 'SELECTED_CONDITIONS' : 'BASE')]}</td>
                 <td className="text-[12.5px]">{c.vendorRule.replace(/_/g, ' ').toLowerCase()}</td>
                 <td>{c.capitalise ? 'Yes' : 'No'}</td>
                 <td>{c.allowedLevel}</td>

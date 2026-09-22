@@ -5,7 +5,7 @@ import type { CategoryCode, ConditionMaster } from '../types';
 // every preset stays overridable except Sign for STAT/DISC/DEDN (locked).
 export const CATEGORY_PRESETS: Record<
   CategoryCode,
-  Partial<ConditionMaster> & { sequenceBand: [number, number]; signLocked: boolean }
+  Partial<ConditionMaster> & { signLocked: boolean }
 > = {
   DISC: {
     sign: '-',
@@ -15,9 +15,9 @@ export const CATEGORY_PRESETS: Record<
     vendorRule: 'SAME_AS_PO',
     capitalise: true,
     requiresServiceConfirmation: false,
+    lineItemGrnRequired: false,
     rateEditableOnPo: true,
     allowedLevel: 'BOTH',
-    sequenceBand: [10, 19],
     calculateOn: 'LINE_BASE',
   },
   SURC: {
@@ -28,9 +28,9 @@ export const CATEGORY_PRESETS: Record<
     vendorRule: 'SAME_AS_PO',
     capitalise: true,
     requiresServiceConfirmation: false,
+    lineItemGrnRequired: false,
     rateEditableOnPo: true,
     allowedLevel: 'BOTH',
-    sequenceBand: [20, 29],
     calculateOn: 'LINE_BASE',
   },
   LOGI: {
@@ -41,9 +41,9 @@ export const CATEGORY_PRESETS: Record<
     vendorRule: 'MUST_DIFFER',
     capitalise: true,
     requiresServiceConfirmation: true,
+    lineItemGrnRequired: true,
     rateEditableOnPo: true,
     allowedLevel: 'HEADER',
-    sequenceBand: [30, 49],
     calculateOn: 'LINE_BASE',
   },
   STAT: {
@@ -54,9 +54,9 @@ export const CATEGORY_PRESETS: Record<
     vendorRule: 'MUST_DIFFER',
     capitalise: true,
     requiresServiceConfirmation: false,
+    lineItemGrnRequired: false,
     rateEditableOnPo: false,
     allowedLevel: 'HEADER',
-    sequenceBand: [50, 79],
     calculateOn: 'SELECTED',
   },
   DEDN: {
@@ -67,9 +67,9 @@ export const CATEGORY_PRESETS: Record<
     vendorRule: 'SAME_AS_PO',
     capitalise: false,
     requiresServiceConfirmation: false,
+    lineItemGrnRequired: false,
     rateEditableOnPo: true,
     allowedLevel: 'LINE',
-    sequenceBand: [90, 99],
     calculateOn: 'LINE_BASE',
   },
   OTHR: {
@@ -80,9 +80,9 @@ export const CATEGORY_PRESETS: Record<
     vendorRule: 'EITHER',
     capitalise: false,
     requiresServiceConfirmation: false,
+    lineItemGrnRequired: false,
     rateEditableOnPo: true,
     allowedLevel: 'BOTH',
-    sequenceBand: [80, 89],
     calculateOn: 'LINE_BASE',
   },
 };

@@ -15,7 +15,14 @@ const JURISDICTION_LABELS: Record<ComputedConditionLine['jurisdiction'], string>
 function calculateOnDescription(item: ComputedConditionLine, nameByCode: Record<string, string>): string {
   if (item.calculateOn === 'LINE_BASE') return 'Line base value';
   if (item.calculateOnCodes.length === 0) return '—';
-  return item.calculateOnCodes.map((code) => (code === BASE_STEP ? 'Base' : nameByCode[code] ?? code)).join(' + ');
+  const weights = item.calculateOnWeights ?? {};
+  return item.calculateOnCodes
+    .map((code) => {
+      const label = code === BASE_STEP ? 'Base' : nameByCode[code] ?? code;
+      const w = weights[code] ?? 100;
+      return w === 100 ? label : `${w}% of ${label}`;
+    })
+    .join(' + ');
 }
 
 function rateDisplay(item: ComputedConditionLine, uomName: string | undefined, currency: string): string {
@@ -61,7 +68,7 @@ export function ConditionCalcModal({
   const hasGstSplit = item.cgst > 0 || item.sgst > 0 || item.igst > 0 || item.utgst > 0 || item.rcmAmount > 0;
 
   return (
-    <Modal open onClose={onClose} title="How this amount was calculated" subtitle={`${item.conditionName} · Seq ${item.sequence} · ${lineLabel}`} width={520}>
+    <Modal open onClose={onClose} title="How this amount was calculated" subtitle={`${item.conditionName} · ${item.conditionCode} · ${lineLabel}`} width={520}>
       <div className="mb-4 flex items-center gap-2">
         <CategoryBadge category={item.category} />
         <span className="badge bg-slate-100 text-slate-600">{item.sign === '-' ? 'Deduction' : 'Addition'}</span>

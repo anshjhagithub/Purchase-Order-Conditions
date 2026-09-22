@@ -2,14 +2,15 @@ import React, { useMemo, useState } from 'react';
 import { Modal } from '../../components/ui/Modal';
 import { Field, TextInput, TextArea, SelectInput, MultiChipSelect } from '../../components/ui/Form';
 import { useData } from '../../context/DataContext';
-import { VENDORS, TAX_MASTER, UOMS } from '../../data/seed';
+import { VENDORS, TAX_MASTER, UOMS, CONDITION_BUNDLES } from '../../data/seed';
 import { uid } from '../../data/ids';
 import { BASE_STEP, computeLine, describeCalculation, formatCurrency, type ComputedConditionLine } from '../../engine/calc';
 import { CALC_BASIS_LABELS, CALC_BASIS_RATE_LABEL, type AppliedCondition, type POLine, type PurchaseOrder } from '../../types';
 import { CategoryBadge } from '../../components/ui/Badge';
-import { AlertTriangle, Info } from 'lucide-react';
+import { AlertTriangle, Info, Eye, Layers } from 'lucide-react';
 
 type ApplyTo = 'LINE' | 'MULTI' | 'ALL' | 'HEADER';
+type Mode = 'SINGLE' | 'BUNDLE';
 
 export function AddConditionModal({
   po,
@@ -25,6 +26,9 @@ export function AddConditionModal({
   const { conditionMasters, markConditionMasterUsed } = useData();
   const activeMasters = conditionMasters.filter((c) => c.status === 'Active');
 
+  const [mode, setMode] = useState<Mode>('SINGLE');
+  const [bundleId, setBundleId] = useState('');
+
   const [conditionCode, setConditionCode] = useState('');
   const [applyTo, setApplyTo] = useState<ApplyTo>(contextLineId ? 'LINE' : 'HEADER');
   const [selectedLineIds, setSelectedLineIds] = useState<string[]>(contextLineId ? [contextLineId] : po.lines.map((l) => l.id));
@@ -37,13 +41,19 @@ export function AddConditionModal({
   const [errors, setErrors] = useState<string[]>([]);
 
   const master = activeMasters.find((c) => c.code === conditionCode);
+  const bundle = CONDITION_BUNDLES.find((b) => b.id === bundleId);
+  const bundleMasters = useMemo(
+    () => (bundle ? bundle.conditionCodes.map((code) => conditionMasters.find((c) => c.code === code)).filter((m): m is NonNullable<typeof m> => !!m) : []),
+    [bundle, conditionMasters]
+  );
 
   const allowedApplyTo: ApplyTo[] = useMemo(() => {
+    if (mode === 'BUNDLE') return ['LINE', 'MULTI', 'ALL'];
     if (!master) return ['LINE', 'MULTI', 'ALL', 'HEADER'];
     if (master.allowedLevel === 'LINE') return ['LINE', 'MULTI', 'ALL'];
     if (master.allowedLevel === 'HEADER') return ['HEADER'];
     return ['LINE', 'MULTI', 'ALL', 'HEADER'];
-  }, [master]);
+  }, [master, mode]);
 
   React.useEffect(() => {
     if (master) {
@@ -54,6 +64,11 @@ export function AddConditionModal({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conditionCode]);
+
+  React.useEffect(() => {
+    if (!allowedApplyTo.includes(applyTo)) setApplyTo(allowedApplyTo[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, bundleId]);
 
   const vendorOptions = useMemo(() => {
     let list = VENDORS;
@@ -81,10 +96,14 @@ export function AddConditionModal({
       category: master.category,
       level: applyTo === 'HEADER' ? 'HEADER' : 'LINE',
       lineId: applyTo === 'HEADER' ? undefined : line.id,
-      sequence: master.sequence,
       calcBasis: master.calcBasis,
       calculateOn: master.calculateOn,
+      calculationMode: master.calculationMode,
+      calculationRule: master.calculationRule,
+      minChargeAmount: master.minChargeAmount,
+      maxChargeAmount: master.maxChargeAmount,
       calculateOnCodes: master.calculateOnCodes,
+      calculateOnWeights: master.calculateOnWeights,
       sign: master.sign,
       rate,
       qty,
@@ -102,6 +121,7 @@ export function AddConditionModal({
       requiresServiceConfirmation: master.requiresServiceConfirmation,
       autoConfirmOnMainGrn: master.autoConfirmOnMainGrn,
       confirmationMode: master.confirmationOnPartialGrn,
+      lineItemGrnRequired: master.lineItemGrnRequired,
       status: 'Draft',
       confirmedPct: 0,
       currency: master.currency,
@@ -109,18 +129,89 @@ export function AddConditionModal({
     (draft as any).slabTable = master.slabTable;
 
     const tempLine = { ...line, conditions: [...line.conditions, draft] };
-    const lc = computeLine(tempLine, VENDORS, po.deliveryState);
+    const lc = computeLine(tempLine, VENDORS, po);
     const draftItem = lc.items.find((i) => i.id === 'draft')!;
     return { line, lineBaseValue: lc.lineBaseValue, items: lc.items, draftItem };
   }, [master, targetLines, rate, qty, vendorId, applyTo, tax, po.deliveryState]);
 
+  // Bundle preview: every condition in the bundle is added to the first target line as a
+  // draft, all at once — the DAG in engine/calc.ts resolves their DependsOn against each
+  // other and against the line's existing conditions in the same topological sort, exactly
+  // as if each had been added one-by-one. No special-casing for "this came from a bundle."
+  const bundlePreview = useMemo(() => {
+    if (mode !== 'BUNDLE' || bundleMasters.length === 0 || targetLines.length === 0) return null;
+    const line = targetLines[0];
+    const drafts: AppliedCondition[] = bundleMasters.map((m) => {
+      const vendor = VENDORS.find((v) => v.id === m.defaultVendorId) ?? VENDORS.find((v) => v.id === po.vendorId);
+      const t = TAX_MASTER.find((tx) => tx.code === m.taxCode);
+      const draft: AppliedCondition = {
+        id: `draft-${m.code}`,
+        conditionCode: m.code,
+        conditionName: m.name,
+        category: m.category,
+        level: 'LINE',
+        lineId: line.id,
+        calcBasis: m.calcBasis,
+        calculateOn: m.calculateOn,
+        calculationMode: m.calculationMode,
+        calculationRule: m.calculationRule,
+        minChargeAmount: m.minChargeAmount,
+        maxChargeAmount: m.maxChargeAmount,
+        calculateOnCodes: m.calculateOnCodes,
+        calculateOnWeights: m.calculateOnWeights,
+        sign: m.sign,
+        rate: m.defaultRate ?? 0,
+        qty: ['FIXED_PER_PO', 'FIXED_PER_LINE'].includes(m.calcBasis) ? 1 : line.qty,
+        uomId: m.uomId,
+        vendorId: vendor?.id ?? po.vendorId,
+        vendorName: vendor?.name ?? po.vendorName,
+        distributionBasis: m.distributionBasis,
+        codeType: m.codeType,
+        taxCode: m.taxCode,
+        gstRate: t?.gstRate ?? 0,
+        gstTreatment: m.gstTreatment,
+        capitalise: m.capitalise,
+        statistical: m.statistical,
+        rounding: m.rounding,
+        requiresServiceConfirmation: m.requiresServiceConfirmation,
+        autoConfirmOnMainGrn: m.autoConfirmOnMainGrn,
+        confirmationMode: m.confirmationOnPartialGrn,
+        lineItemGrnRequired: m.lineItemGrnRequired,
+        status: 'Draft',
+        confirmedPct: 0,
+        currency: m.currency,
+      };
+      (draft as any).slabTable = m.slabTable;
+      return draft;
+    });
+
+    const tempLine = { ...line, conditions: [...line.conditions, ...drafts] };
+    const lc = computeLine(tempLine, VENDORS, po);
+    return { line, lineBaseValue: lc.lineBaseValue, items: lc.items };
+  }, [mode, bundleMasters, targetLines, po.deliveryState, po.vendorId, po.vendorName]);
+
   const validate = (): string[] => {
     const errs: string[] = [];
+    if (targetLines.length === 0) errs.push('Select at least one line to apply this to.');
+
+    if (mode === 'BUNDLE') {
+      if (!bundle) errs.push('Select a condition bundle.');
+      if (bundle && bundleMasters.length !== bundle.conditionCodes.length) {
+        errs.push('One or more conditions in this bundle are missing or inactive in the Condition Master.');
+      }
+      bundleMasters.forEach((m) => {
+        if (m.mutuallyExclusiveWith?.length) {
+          const clash = targetLines.some((l) => l.conditions.some((c) => m.mutuallyExclusiveWith.includes(c.conditionCode)));
+          if (clash) errs.push(`${m.code} is mutually exclusive with an existing condition on a target line (P8).`);
+        }
+      });
+      return errs;
+    }
+
     if (!master) errs.push('Select a condition.');
     if (!vendorId) errs.push('Vendor for Condition is required.');
     if (master?.vendorRule === 'MUST_DIFFER' && vendorId === po.vendorId) errs.push('Vendor must differ from the PO vendor for this condition (P1/P2).');
     if (master?.vendorRule === 'SAME_AS_PO' && vendorId !== po.vendorId) errs.push('This condition must use the same vendor as the PO.');
-    if (targetLines.length === 0) errs.push('Select at least one line to apply this condition to.');
     if (master && !['FIXED_PER_PO', 'FIXED_PER_LINE'].includes(master.calcBasis)) {
       targetLines.forEach((l) => {
         if (qty > l.qty) errs.push(`Condition quantity cannot exceed line quantity (${l.qty}) on ${l.itemName} (P6).`);
@@ -135,7 +226,84 @@ export function AddConditionModal({
     return errs;
   };
 
+  const handleSaveBundle = () => {
+    const errs = validate();
+    setErrors(errs);
+    if (errs.length > 0 || !bundle || targetLines.length === 0) return;
+
+    const next: PurchaseOrder = { ...po, lines: po.lines.map((l) => ({ ...l, conditions: [...l.conditions] })), headerConditions: [...po.headerConditions] };
+
+    // Every condition keeps the DependsOn/calculateOnCodes wiring from its own master record —
+    // the bundle only decides which codes get added together, in one action. The calc engine's
+    // dependency graph (engine/calc.ts) resolves ordering the same way whether these conditions
+    // arrived via a bundle or were each added by hand.
+    bundleMasters.forEach((m) => {
+      markConditionMasterUsed(m.id);
+      const vendor = VENDORS.find((v) => v.id === m.defaultVendorId) ?? VENDORS.find((v) => v.id === po.vendorId);
+      const t = TAX_MASTER.find((tx) => tx.code === m.taxCode);
+      const isHeader = m.allowedLevel === 'HEADER';
+
+      const buildCond = (line?: POLine): AppliedCondition => {
+        const cond: AppliedCondition = {
+          id: uid('ac'),
+          conditionCode: m.code,
+          conditionName: m.name,
+          category: m.category,
+          level: isHeader ? 'HEADER' : 'LINE',
+          lineId: isHeader ? undefined : line?.id,
+          applyToLineIds: isHeader ? targetLines.map((l) => l.id) : undefined,
+          calcBasis: m.calcBasis,
+          calculateOn: m.calculateOn,
+          calculationMode: m.calculationMode,
+          calculationRule: m.calculationRule,
+          minChargeAmount: m.minChargeAmount,
+          maxChargeAmount: m.maxChargeAmount,
+          calculateOnCodes: m.calculateOnCodes,
+          calculateOnWeights: m.calculateOnWeights,
+          sign: m.sign,
+          rate: m.defaultRate ?? 0,
+          qty: ['FIXED_PER_PO', 'FIXED_PER_LINE'].includes(m.calcBasis) ? 1 : line?.qty ?? 1,
+          uomId: m.uomId,
+          vendorId: vendor?.id ?? po.vendorId,
+          vendorName: vendor?.name ?? po.vendorName,
+          distributionBasis: m.distributionBasis,
+          codeType: m.codeType,
+          taxCode: m.taxCode,
+          gstRate: t?.gstRate ?? 0,
+          gstTreatment: m.gstTreatment,
+          capitalise: m.capitalise,
+          statistical: m.statistical,
+          rounding: m.rounding,
+          requiresServiceConfirmation: m.requiresServiceConfirmation,
+          autoConfirmOnMainGrn: m.autoConfirmOnMainGrn,
+          confirmationMode: m.confirmationOnPartialGrn,
+          lineItemGrnRequired: m.lineItemGrnRequired,
+          status: 'Draft',
+          confirmedPct: 0,
+          notes: notes || `Added via bundle: ${bundle.name}`,
+          currency: m.currency,
+        };
+        (cond as any).slabTable = m.slabTable;
+        return cond;
+      };
+
+      if (isHeader) {
+        next.headerConditions.push(buildCond());
+      } else {
+        targetLines.forEach((line) => {
+          const idx = next.lines.findIndex((l) => l.id === line.id);
+          next.lines[idx].conditions.push(buildCond(line));
+        });
+      }
+    });
+
+    onSave(next);
+    onClose();
+  };
+
   const handleSave = () => {
+    if (mode === 'BUNDLE') return handleSaveBundle();
+
     const errs = validate();
     // Only hard-block on the first three rule types; treat min/max as warnings shown but non-blocking here for prototype clarity.
     const blocking = errs.filter((e) => !e.includes('warning only') && !e.includes('approval will be required'));
@@ -155,10 +323,14 @@ export function AddConditionModal({
         category: master.category,
         level: 'HEADER',
         applyToLineIds: targetLines.map((l) => l.id),
-        sequence: master.sequence,
         calcBasis: master.calcBasis,
         calculateOn: master.calculateOn,
+        calculationMode: master.calculationMode,
+        calculationRule: master.calculationRule,
+        minChargeAmount: master.minChargeAmount,
+        maxChargeAmount: master.maxChargeAmount,
         calculateOnCodes: master.calculateOnCodes,
+        calculateOnWeights: master.calculateOnWeights,
         sign: master.sign,
         rate,
         qty,
@@ -177,6 +349,7 @@ export function AddConditionModal({
         requiresServiceConfirmation: master.requiresServiceConfirmation,
         autoConfirmOnMainGrn: master.autoConfirmOnMainGrn,
         confirmationMode: master.confirmationOnPartialGrn,
+        lineItemGrnRequired: master.lineItemGrnRequired,
         status: 'Draft',
         confirmedPct: 0,
         notes: notes || undefined,
@@ -193,10 +366,14 @@ export function AddConditionModal({
           category: master.category,
           level: 'LINE',
           lineId: line.id,
-          sequence: master.sequence,
           calcBasis: master.calcBasis,
           calculateOn: master.calculateOn,
+          calculationMode: master.calculationMode,
+          calculationRule: master.calculationRule,
+          minChargeAmount: master.minChargeAmount,
+          maxChargeAmount: master.maxChargeAmount,
           calculateOnCodes: master.calculateOnCodes,
+          calculateOnWeights: master.calculateOnWeights,
           sign: master.sign,
           rate,
           qty: ['FIXED_PER_PO', 'FIXED_PER_LINE'].includes(master.calcBasis) ? 1 : qty,
@@ -214,6 +391,7 @@ export function AddConditionModal({
           requiresServiceConfirmation: master.requiresServiceConfirmation,
           autoConfirmOnMainGrn: master.autoConfirmOnMainGrn,
           confirmationMode: master.confirmationOnPartialGrn,
+          lineItemGrnRequired: master.lineItemGrnRequired,
           status: 'Draft',
           confirmedPct: 0,
           notes: notes || undefined,
@@ -242,7 +420,7 @@ export function AddConditionModal({
             Cancel
           </button>
           <button onClick={handleSave} className="btn-primary">
-            Add Condition
+            {mode === 'BUNDLE' ? 'Apply Bundle' : 'Add Condition'}
           </button>
         </div>
       }
@@ -261,22 +439,70 @@ export function AddConditionModal({
       )}
 
       <div className="space-y-4">
-        <Field label="Select Condition" required>
-          <SelectInput
-            value={conditionCode}
-            onChange={setConditionCode}
-            placeholder="Select Condition"
-            options={activeMasters.map((c) => ({ value: c.code, label: `${c.code} — ${c.name}` }))}
-          />
-          {master && (
-            <div className="mt-2 flex items-center gap-2">
-              <CategoryBadge category={master.category} />
-              {master.description && <span className="text-[12px] text-slate-400">{master.description}</span>}
-            </div>
-          )}
+        <Field label="Mode">
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setMode('SINGLE')}
+              className={`rounded-lg border px-3 py-2 text-[12.5px] font-semibold transition ${
+                mode === 'SINGLE' ? 'border-indigo-brand bg-indigo-brand text-white' : 'border-slate-200 text-slate-600 hover:border-slate-300'
+              }`}
+            >
+              Single Condition
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('BUNDLE')}
+              className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[12.5px] font-semibold transition ${
+                mode === 'BUNDLE' ? 'border-indigo-brand bg-indigo-brand text-white' : 'border-slate-200 text-slate-600 hover:border-slate-300'
+              }`}
+            >
+              <Layers size={13} /> Condition Bundle
+            </button>
+          </div>
         </Field>
 
-        {master && (
+        {mode === 'SINGLE' && (
+          <Field label="Select Condition" required>
+            <SelectInput
+              value={conditionCode}
+              onChange={setConditionCode}
+              placeholder="Select Condition"
+              options={activeMasters.map((c) => ({ value: c.code, label: `${c.code} — ${c.name}` }))}
+            />
+            {master && (
+              <div className="mt-2 flex items-center gap-2">
+                <CategoryBadge category={master.category} />
+                {master.description && <span className="text-[12px] text-slate-400">{master.description}</span>}
+              </div>
+            )}
+          </Field>
+        )}
+
+        {mode === 'BUNDLE' && (
+          <Field label="Select Bundle" required hint="Applies every condition in the bundle in one step. Each keeps its own Calculate-On wiring from the Condition Master, so the cascade resolves exactly as if they'd been added one at a time.">
+            <SelectInput
+              value={bundleId}
+              onChange={setBundleId}
+              placeholder="Select Condition Bundle"
+              options={CONDITION_BUNDLES.map((b) => ({ value: b.id, label: b.name }))}
+            />
+            {bundle && (
+              <div className="mt-2 space-y-1.5">
+                <div className="text-[12px] text-slate-400">{bundle.description}</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {bundleMasters.map((m) => (
+                    <span key={m.code} className="field-chip !py-1 text-[11px]">
+                      {m.code} — {m.name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </Field>
+        )}
+
+        {(master || (mode === 'BUNDLE' && bundle)) && (
           <>
             <Field label="Apply To" required>
               <div className="flex flex-wrap gap-2">
@@ -305,6 +531,8 @@ export function AddConditionModal({
               </Field>
             )}
 
+            {mode === 'SINGLE' && master && (
+              <>
             <Field label="PO for Condition (optional)" hint="Links an existing PO raised on the logistics/service vendor for this charge.">
               <TextInput value={poForCondition} onChange={(e) => setPoForCondition(e.target.value)} placeholder="PO for Condition (optional)" />
             </Field>
@@ -312,6 +540,22 @@ export function AddConditionModal({
             <Field label="Vendor for Condition" required>
               <SelectInput value={vendorId} onChange={setVendorId} options={vendorOptions.map((v) => ({ value: v.id, label: v.name }))} />
             </Field>
+
+            {vendorId && (
+              <div className="flex items-start gap-2 rounded-xl border border-sky-100 bg-sky-50/60 px-3.5 py-2.5">
+                <Eye size={14} className="mt-0.5 shrink-0 text-sky-500" />
+                <p className="text-[12px] leading-snug text-sky-800">
+                  {vendorId === po.vendorId ? (
+                    <>Visible on the <span className="font-semibold">material vendor's</span> PO copy — same vendor as the PO header.</>
+                  ) : (
+                    <>
+                      Visible only on <span className="font-semibold">{VENDORS.find((v) => v.id === vendorId)?.name}'s</span> document (e.g. a Freight
+                      Advice or Clearing Instruction) — hidden from {po.vendorName} and every other condition vendor on this PO.
+                    </>
+                  )}
+                </p>
+              </div>
+            )}
 
             <div className="grid grid-cols-2 gap-4">
               <Field label="Basis">
@@ -383,6 +627,35 @@ export function AddConditionModal({
                 </div>
               </div>
             )}
+              </>
+            )}
+
+            {mode === 'BUNDLE' && bundlePreview && (
+              <div className="rounded-xl border border-indigo-100 bg-lav-100 p-4">
+                <div className="mb-2 flex items-center gap-1.5 text-[12px] font-bold uppercase tracking-wide text-indigo-brand">
+                  <Info size={13} /> Live Calculation — bundle preview
+                </div>
+                {targetLines.length > 1 && (
+                  <div className="mb-2 text-[11.5px] text-slate-400">
+                    Previewed against #{bundlePreview.line.lineNo} {bundlePreview.line.itemName} — other lines will differ by their own qty/weight/value.
+                    Header-level conditions in this bundle will be computed once at PO scope and distributed across all {targetLines.length} target lines.
+                  </div>
+                )}
+
+                <CascadeTable line={bundlePreview.line} lineBaseValue={bundlePreview.lineBaseValue} items={bundlePreview.items} currency={po.currency} />
+
+                <div className="mt-3 space-y-1.5 text-[13px]">
+                  <Row
+                    label={`This bundle — ${bundleMasters.length} condition${bundleMasters.length === 1 ? '' : 's'} added, Net effect`}
+                    value={formatCurrency(
+                      bundlePreview.items.filter((i) => i.id.startsWith('draft-')).reduce((s, i) => s + i.computedAmount, 0),
+                      po.currency
+                    )}
+                    strong
+                  />
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -402,8 +675,8 @@ function Row({ label, value, strong, note }: { label: string; value: string; str
   );
 }
 
-// Running-cascade preview in the 20-domain/worked-examples.md format:
-// Seq | Condition | Calculate On | Rate | Calculation | Amount | Running.
+// Running-cascade preview: Condition | Calculate On | Rate | Calculation | Amount | Running
+// — order is dependency-derived (engine/calc.ts orderByDependency), not a sequence number.
 function CascadeTable({
   line,
   lineBaseValue,
@@ -415,21 +688,49 @@ function CascadeTable({
   items: ComputedConditionLine[];
   currency: string;
 }) {
-  const seqByCode: Record<string, number> = {};
-  items.forEach((i) => {
-    seqByCode[i.conditionCode] = i.sequence;
-  });
-
+  // Compact "Calculate On" label — dispatches on the new calculationMode first
+  // (BASE/DIRECT reduce to Base; SELECTED_CONDITIONS shows its weighted-step formula;
+  // CONDITIONAL/SLAB/CUMULATIVE get a short mode tag), falling back to the legacy
+  // calculateOn/calculateOnCodes reading for any condition saved before this model.
   const calculateOnLabel = (item: ComputedConditionLine) => {
+    if (item.calculationMode === 'SELECTED_CONDITIONS' && item.calculationRule?.mode === 'SELECTED_CONDITIONS') {
+      const steps = item.calculationRule.selected.steps;
+      if (steps.length === 0) return '—';
+      return steps
+        .map((s, i) => {
+          const label = s.source === 'BASE' ? 'Base' : s.conditionCode ?? '?';
+          const kind = s.valueKind === 'CONDITION_BASE' ? '(Base)' : '';
+          const pctText = s.percentage === 100 ? '' : `${s.percentage}%`;
+          const signText = s.operator === '-' ? '-' : i > 0 ? '+' : '';
+          return `${signText}${pctText}${label}${kind}`;
+        })
+        .join('');
+    }
+    if (item.calculationMode === 'BASE' || item.calculationMode === 'DIRECT') return 'Base';
+    if (item.calculationMode === 'CONDITIONAL') return 'Conditional';
+    if (item.calculationMode === 'SLAB') return 'Slab tier';
+    if (item.calculationMode === 'CUMULATIVE') return 'Cumulative';
+
     if (item.calculateOn === 'LINE_BASE') return 'Base';
-    const hasBase = item.calculateOnCodes.includes(BASE_STEP);
-    const others = item.calculateOnCodes.filter((c) => c !== BASE_STEP).map((c) => seqByCode[c] ?? c);
-    if (hasBase && others.length) return `Base+${others.join(',')}`;
-    if (hasBase) return 'Base';
-    return others.length ? others.join(',') : '—';
+    const weights = item.calculateOnWeights ?? {};
+    const term = (c: string) => {
+      const label = c === BASE_STEP ? 'Base' : c;
+      const w = weights[c] ?? 100;
+      return w === 100 ? `${label}` : `${w}%${label}`;
+    };
+    return item.calculateOnCodes.length ? item.calculateOnCodes.map(term).join('+') : '—';
   };
 
   const rateLabel = (item: ComputedConditionLine) => {
+    if (item.calculationMode === 'CONDITIONAL') {
+      const f = item.effectiveFormula;
+      if (!f) return '—';
+      if (f.type === 'PERCENTAGE') return `${f.value}%`;
+      if (f.type === 'FIXED') return formatCurrency(f.value, currency);
+      const uom = UOMS.find((u) => u.id === f.uomId)?.name;
+      return `${f.value}${uom ? ' /' + uom : ''}`;
+    }
+    if (item.calculationMode === 'SLAB' || item.calculationMode === 'CUMULATIVE') return 'Tier grid';
     if (item.calcBasis === 'PCT_OF_LINE_BASE' || item.calcBasis === 'PCT_OF_SELECTED_BASE') return `${item.rate}%`;
     if (item.calcBasis === 'FIXED_PER_PO' || item.calcBasis === 'FIXED_PER_LINE') return formatCurrency(item.rate, currency);
     if (item.calcBasis === 'SLAB') return 'Slab grid';
@@ -444,7 +745,6 @@ function CascadeTable({
       <table className="w-full text-[12px]">
         <thead>
           <tr className="bg-indigo-50 text-left text-[10.5px] font-bold uppercase tracking-wide text-indigo-brand">
-            <th className="px-2.5 py-1.5">Seq</th>
             <th className="px-2.5 py-1.5">Condition</th>
             <th className="px-2.5 py-1.5">Calculate On</th>
             <th className="px-2.5 py-1.5">Rate</th>
@@ -470,7 +770,6 @@ function CascadeTable({
             const isDraft = item.id === 'draft';
             return (
               <tr key={item.id} className={`border-t border-indigo-100 ${isDraft ? 'bg-indigo-50/70' : ''}`}>
-                <td className={`px-2.5 py-1.5 ${isDraft ? 'font-bold text-indigo-brand' : ''}`}>{item.sequence}</td>
                 <td className={`px-2.5 py-1.5 ${isDraft ? 'font-bold text-indigo-brand' : 'text-slate-700'}`}>
                   {item.conditionName}
                   {isDraft && <span className="ml-1.5 rounded bg-indigo-brand px-1.5 py-0.5 text-[9.5px] font-bold text-white">NEW</span>}
