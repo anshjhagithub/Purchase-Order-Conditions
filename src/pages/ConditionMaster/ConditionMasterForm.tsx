@@ -277,8 +277,6 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
     if (form.minValue != null && form.maxValue != null && form.minValue > form.maxValue) errs.push('Min Value cannot exceed Max Value.');
     if (form.minChargeAmount != null && form.maxChargeAmount != null && form.minChargeAmount > form.maxChargeAmount)
       errs.push('Minimum Calculated Amount cannot exceed Maximum Calculated Amount.');
-    if (form.autoConfirmOnMainGrn && !form.requiresServiceConfirmation)
-      errs.push('Auto-confirm on main GRN requires Requires Service Confirmation to be enabled (M8).');
 
     // Rule-specific validation
     const rule = form.calculationRule;
@@ -677,14 +675,6 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
             </div>
 
             <div className="grid grid-cols-2 gap-4">
-              <Field label="Requires Service Confirmation">
-                <Toggle checked={form.requiresServiceConfirmation} onChange={(v) => set('requiresServiceConfirmation', v)} />
-              </Field>
-              {form.requiresServiceConfirmation && (
-                <Field label="Auto-confirm on main GRN" hint="Goods arriving is proof the freight was rendered.">
-                  <Toggle checked={form.autoConfirmOnMainGrn} onChange={(v) => set('autoConfirmOnMainGrn', v)} />
-                </Field>
-              )}
               <Field label="Line Item GRN Required" hint="When on, a GRN for this condition can only be created after the underlying item GRN.">
                 <Toggle checked={form.lineItemGrnRequired} onChange={(v) => set('lineItemGrnRequired', v)} />
               </Field>
