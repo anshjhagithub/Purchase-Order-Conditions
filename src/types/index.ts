@@ -187,7 +187,7 @@ export interface SlabTier {
   rateType: SlabRateType;
   rate: number;
 }
-export type SlabBasis = 'QUANTITY' | 'CUMULATIVE_QUANTITY' | 'WEIGHT' | 'VOLUME' | 'BASE_AMOUNT' | 'PO_AMOUNT';
+export type SlabBasis = 'QUANTITY' | 'CUMULATIVE_QUANTITY' | 'WEIGHT' | 'VOLUME' | 'BASE_AMOUNT' | 'PO_AMOUNT' | 'DATE_RANGE';
 export const SLAB_BASIS_LABELS: Record<SlabBasis, string> = {
   QUANTITY: 'Quantity',
   CUMULATIVE_QUANTITY: 'Cumulative Quantity',
@@ -195,6 +195,7 @@ export const SLAB_BASIS_LABELS: Record<SlabBasis, string> = {
   VOLUME: 'Volume',
   BASE_AMOUNT: 'Base Amount',
   PO_AMOUNT: 'PO Amount',
+  DATE_RANGE: 'Date Range',
 };
 export interface SlabRule {
   basis: SlabBasis;
@@ -268,6 +269,8 @@ export interface ConditionMaster {
   taxCalculatedOn: 'CONDITION_AMOUNT' | 'CONDITION_PLUS_SELECTED';
   tdsApplicable: boolean;
   tdsSection?: string;
+  tcsApplicable: boolean;
+  tcsSection?: string;
 
   // 4 Vendor & Ownership
   defaultVendorId?: string;

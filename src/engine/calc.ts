@@ -367,6 +367,11 @@ function slabDriver(basis: string, ctx: ConditionCalcContext): number {
       return ctx.lineQty * ctx.unitVolumeCbm;
     case 'PO_AMOUNT':
       return ctx.poBaseAmount ?? ctx.lineBaseValue;
+    case 'DATE_RANGE':
+      // Tiers store from/to as epoch-ms date bounds when basis is DATE_RANGE — match
+      // against "now" (the effective calculation date; there's no separate PO/GRN date
+      // context wired into ConditionCalcContext yet, so this is the current date).
+      return Date.now();
     case 'BASE_AMOUNT':
     default:
       return ctx.lineBaseValue;
@@ -400,6 +405,12 @@ function computeRuleRaw(cond: AppliedCondition, rule: CalculationRule, ctx: Cond
     case 'SLAB': {
       const driver = slabDriver(rule.slab.basis, ctx);
       const tier = matchTier(rule.slab.tiers, driver);
+      if (rule.slab.basis === 'DATE_RANGE') {
+        // A date-range tier's rate is the amount/percentage that applies for that
+        // window — not multiplied by the (meaningless-as-a-multiplier) date driver.
+        const raw = tier ? (tier.rateType === 'PERCENTAGE' ? (tier.rate / 100) * ctx.lineBaseValue : tier.rate) : 0;
+        return { raw, calcBase: ctx.lineBaseValue };
+      }
       return { raw: tierAmount(tier, driver, driver), calcBase: driver };
     }
     case 'CUMULATIVE': {

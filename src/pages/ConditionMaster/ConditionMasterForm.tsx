@@ -4,20 +4,17 @@ import { Field, TextInput, TextArea, SelectInput, Toggle, Accordion, MultiChipSe
 import { useData } from '../../context/DataContext';
 import { CATEGORY_PRESETS } from '../../data/categoryPresets';
 import { SUBCATEGORY_OPTIONS } from '../../data/subcategories';
-import { TAX_MASTER, UOMS, VENDORS, ENTITIES, INDEX_MASTER } from '../../data/seed';
+import { TAX_MASTER, UOMS, ENTITIES, INDEX_MASTER } from '../../data/seed';
 import { BASE_STEP, detectCircularDependency } from '../../engine/calc';
-import { PO_RULE_FIELDS, LINE_RULE_FIELDS, ruleFieldKey } from '../../engine/ruleFields';
 import { uid } from '../../data/ids';
 import {
   CATEGORY_LABELS,
   CALC_BASIS_LABELS,
   CALC_BASIS_RATE_LABEL,
-  GST_TREATMENT_LABELS,
   VENDOR_RULE_LABELS,
   DISTRIBUTION_LABELS,
   CALCULATION_MODE_LABELS,
   FORMULA_TYPE_LABELS,
-  COMPARISON_OPERATOR_LABELS,
   SLAB_BASIS_LABELS,
   CUMULATIVE_BASIS_LABELS,
   CUMULATIVE_SCOPE_LABELS,
@@ -30,9 +27,6 @@ import {
   type FormulaRule,
   type FormulaType,
   type SelectedStep,
-  type RuleClause,
-  type RuleField,
-  type ComparisonOperator,
   type SlabTier,
   type SlabBasis,
   type CumulativeBasis,
@@ -42,7 +36,6 @@ import { AlertTriangle, Plus, Trash2, X } from 'lucide-react';
 
 const SPEND_CATEGORIES = ['Batteries', 'Electronics', 'Fabrication', 'Packaging Material', 'MRO', 'Petroleum'];
 const INCOTERMS = ['EXW', 'FOB', 'CIF', 'CFR', 'DAP', 'DDP'];
-const VENDOR_GROUPS = Array.from(new Set(VENDORS.map((v) => v.vendorGroup)));
 
 const FORMULA_TYPE_FOR_CALC_BASIS: Record<CalculationBasis, FormulaType> = {
   FIXED_PER_PO: 'FIXED',
@@ -144,6 +137,8 @@ function emptyCondition(): ConditionMaster {
     taxCalculatedOn: 'CONDITION_AMOUNT',
     tdsApplicable: false,
     tdsSection: '',
+    tcsApplicable: false,
+    tcsSection: '',
     defaultVendorId: undefined,
     vendorRule: preset.vendorRule!,
     vendorGroupFilter: [],
@@ -236,8 +231,28 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
     [conditionMasters, form.id]
   );
 
-  const taxOptions = TAX_MASTER.filter((t) => t.codeType === form.codeType);
+  // Tax is a single combined HSN/SAC code picker — codeType is derived from whichever
+  // code is chosen, not a separate field the user sets.
+  const combinedTaxOptions = TAX_MASTER.map((t) => ({ value: t.code, label: `${t.code} — ${t.description} (${t.codeType})` }));
   const selectedTax = TAX_MASTER.find((t) => t.code === form.taxCode);
+
+  // "Base" is ambiguous on its own once a condition can apply at Header or Line level —
+  // spell out which base every "Base" reference in this form actually means. Header-level
+  // conditions apply once at PO scope (then get distributed across lines), so that base is
+  // the PO's base amount; Line-level (or Both) conditions apply against the line they sit on.
+  const baseLabel =
+    form.allowedLevel === 'HEADER'
+      ? 'Base Amount of PO'
+      : form.allowedLevel === 'BOTH'
+        ? 'Base Amount of Applied Level (PO/Line)'
+        : 'Base Amount of Applied Level (Line)';
+
+  // "Condition depends on" — surfaced once, up top, next to Calculate On, instead of
+  // needing a Sequence No. to infer ordering from.
+  const dependsOnCodes =
+    form.calculationRule?.mode === 'SELECTED_CONDITIONS'
+      ? form.calculationRule.selected.steps.filter((s) => s.source === 'CONDITION' && s.conditionCode).map((s) => s.conditionCode!)
+      : [];
 
   const showUom = ['RATE_X_QTY', 'RATE_X_WEIGHT', 'RATE_X_VOLUME'].includes(form.calcBasis);
   const uomOptions = UOMS.filter((u) => {
@@ -249,7 +264,6 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
   const allUomOptions = UOMS.map((u) => ({ value: u.id, label: u.name }));
 
   const isCategoryLocked = form.usedOnAnyPo;
-  const isSignLocked = CATEGORY_PRESETS[form.category].signLocked;
 
   // Only SELECTED_CONDITIONS still uses §2's Calculation Basis + Rate to turn its computed
   // base into an amount (the split the redesign brief's §4 describes: base from the rule
@@ -263,8 +277,7 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
     else if (!/^[A-Z0-9-]{1,20}$/.test(form.code)) errs.push('Condition Code must be uppercase alphanumeric + hyphen, max 20 chars.');
     else if (conditionMasters.some((c) => c.code === form.code && c.id !== form.id)) errs.push('Condition Code must be unique (M1).');
     if (!form.name.trim()) errs.push('Condition Name is required.');
-    if (!form.taxCode && form.gstTreatment !== 'EXEMPT' && form.gstTreatment !== 'NIL_RATED')
-      errs.push(`${form.codeType} Code is required unless GST Treatment is Exempt / Nil-rated (M5).`);
+    if (!form.taxCode) errs.push('HSN/SAC Code is required (M5).');
 
     if (showLegacyBasisFields && form.calcBasis === 'SLAB') {
       const sorted = [...form.slabTable].sort((a, b) => a.from - b.from);
@@ -413,12 +426,54 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
           </div>
         </section>
 
-        {/* Section 2 — Calculation (basis/rate only meaningful for Selected Conditions mode — see §5) */}
+        {/* Section 2 — Calculation: everything that decides the amount, in one place —
+            Calculate On (+ what it depends on), Rounding/Statistical, Include in Landed
+            Cost, Allowed Level, and the Min/Max Calculated Amount clamp. */}
         <section>
           <div className="section-title mb-3">2 · Calculation</div>
+
+          <Field label="Calculate On" required hint="No Sequence No. — calculation order is derived automatically from which conditions this rule references.">
+            <SelectInput
+              value={form.calculationMode ?? 'BASE'}
+              onChange={(v) => setCalcMode(v as CalculationMode)}
+              options={(Object.keys(CALCULATION_MODE_LABELS) as CalculationMode[])
+                .filter((m) => m !== 'CONDITIONAL')
+                .map((m) => ({ value: m, label: CALCULATION_MODE_LABELS[m] }))}
+            />
+          </Field>
+
+          {dependsOnCodes.length > 0 && (
+            <div className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11.5px] text-amber-700">
+              <span className="font-semibold">Condition depends on:</span> {dependsOnCodes.join(', ')}
+            </div>
+          )}
+
+          <div className="mt-3">
+            {form.calculationRule?.mode === 'BASE' && (
+              <FormulaRuleBuilder value={form.calculationRule.base} uomOptions={allUomOptions} baseLabel={baseLabel} onChange={(f) => setRule({ mode: 'BASE', base: f })} previewLabel="Condition" />
+            )}
+            {form.calculationRule?.mode === 'DIRECT' && (
+              <FormulaRuleBuilder value={form.calculationRule.direct} uomOptions={allUomOptions} baseLabel={baseLabel} onChange={(f) => setRule({ mode: 'DIRECT', direct: f })} previewLabel="Condition" />
+            )}
+            {form.calculationRule?.mode === 'SELECTED_CONDITIONS' && (
+              <SelectedConditionsBuilder
+                steps={form.calculationRule.selected.steps}
+                baseLabel={baseLabel}
+                options={[{ value: BASE_STEP, label: baseLabel }, ...otherConditionOptions]}
+                onChange={(steps) => setRule({ mode: 'SELECTED_CONDITIONS', selected: { steps } })}
+              />
+            )}
+            {form.calculationRule?.mode === 'SLAB' && (
+              <SlabRuleBuilder rule={form.calculationRule.slab} onChange={(slab) => setRule({ mode: 'SLAB', slab })} />
+            )}
+            {form.calculationRule?.mode === 'CUMULATIVE' && (
+              <CumulativeRuleBuilder rule={form.calculationRule.cumulative} onChange={(cumulative) => setRule({ mode: 'CUMULATIVE', cumulative })} />
+            )}
+          </div>
+
           {showLegacyBasisFields && (
-            <div className="grid grid-cols-2 gap-4">
-              <Field label="Calculation Basis" required hint="How the Calculate-On base below (§5) becomes this condition's amount.">
+            <div className="mt-4 grid grid-cols-2 gap-4 rounded-xl border border-dashed border-slate-200 p-3.5">
+              <Field label="Calculation Basis" required hint="How the Calculate-On base above becomes this condition's amount.">
                 <SelectInput
                   value={form.calcBasis}
                   onChange={(v) => set('calcBasis', v as CalculationBasis)}
@@ -430,7 +485,7 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
                   <SelectInput value={form.uomId ?? ''} onChange={(v) => set('uomId', v)} placeholder="Select UoM" options={uomOptions.map((u) => ({ value: u.id, label: u.name }))} />
                 </Field>
               )}
-              <Field label={CALC_BASIS_RATE_LABEL[form.calcBasis]} hint="A default — pre-fills the PO form, overridable if 5.9 permits.">
+              <Field label={CALC_BASIS_RATE_LABEL[form.calcBasis]} hint="A default — pre-fills the PO form, overridable if permitted.">
                 <TextInput
                   type="number"
                   value={form.defaultRate ?? ''}
@@ -440,35 +495,9 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
               </Field>
             </div>
           )}
-          {!showLegacyBasisFields && (
-            <div className="rounded-lg border border-dashed border-slate-200 px-3.5 py-2.5 text-[12px] text-slate-400">
-              Fully determined by the Calculate On formula in §5 Advanced Settings — no separate basis/rate needed for this mode.
-            </div>
-          )}
+
           <div className="mt-4 grid grid-cols-2 gap-4">
-            <Field label="Sign" required>
-              <div className="flex h-[42px] items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3.5">
-                <span className={`inline-flex h-6 w-6 items-center justify-center rounded font-bold ${form.sign === '-' ? 'bg-rose-100 text-rose-600' : 'bg-emerald-100 text-emerald-600'}`}>
-                  {form.sign}
-                </span>
-                <span className="text-[12.5px] text-slate-500">
-                  {isSignLocked ? `Locked by category (${CATEGORY_LABELS[form.category]})` : 'Editable for Other Charge / Pass-through'}
-                </span>
-                {!isSignLocked && (
-                  <button
-                    type="button"
-                    onClick={() => set('sign', form.sign === '+' ? '-' : '+')}
-                    className="ml-auto text-[12px] font-semibold text-indigo-brand"
-                  >
-                    Flip
-                  </button>
-                )}
-              </div>
-            </Field>
-            <Field label="Currency" required>
-              <SelectInput value={form.currency} onChange={(v) => set('currency', v)} options={[{ value: 'INR', label: 'INR — Indian Rupee' }, { value: 'USD', label: 'USD — US Dollar' }, { value: 'EUR', label: 'EUR — Euro' }]} />
-            </Field>
-            <Field label="Rounding Rule" required>
+            <Field label="Rounding Rule">
               <SelectInput
                 value={form.rounding}
                 onChange={(v) => set('rounding', v as ConditionMaster['rounding'])}
@@ -480,10 +509,50 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
                 ]}
               />
             </Field>
-            <Field label="Statistical" hint="If true, displays on the PO for visibility but does not affect PO total or vendor payable.">
+            <Field
+              label="Statistical"
+              hint="If true, this condition is shown on the PO for visibility but excluded from PO totals, vendor payable, and invoice-level matching/claims."
+            >
               <Toggle checked={form.statistical} onChange={(v) => set('statistical', v)} />
             </Field>
+            <Field label="Include in Item Landed Cost">
+              <Toggle checked={form.capitalise} onChange={(v) => set('capitalise', v)} />
+            </Field>
+            <Field label="Allowed Level" required>
+              <SelectInput
+                value={form.allowedLevel}
+                onChange={(v) => set('allowedLevel', v as ConditionMaster['allowedLevel'])}
+                options={[{ value: 'LINE', label: 'Line only' }, { value: 'HEADER', label: 'Header only' }, { value: 'BOTH', label: 'Both' }]}
+              />
+            </Field>
+            {form.allowedLevel !== 'LINE' && (
+              <Field label="Distribution Basis" hint="How a header condition explodes across lines. Wrong basis produces wrong landed cost.">
+                <SelectInput
+                  value={form.distributionBasis ?? 'VALUE'}
+                  onChange={(v) => set('distributionBasis', v as ConditionMaster['distributionBasis'])}
+                  options={Object.entries(DISTRIBUTION_LABELS).map(([value, label]) => ({ value, label }))}
+                />
+              </Field>
+            )}
           </div>
+
+          <div className="mt-4">
+            <div className="mb-2 flex items-center justify-between">
+              <div className="text-[13px] font-bold text-slate-700">Minimum / Maximum Calculated Amount</div>
+              <Toggle checked={minMaxChargeOpen} onChange={(v) => { setMinMaxChargeOpen(v); if (!v) { set('minChargeAmount', undefined); set('maxChargeAmount', undefined); } }} />
+            </div>
+            {minMaxChargeOpen && (
+              <div className="grid grid-cols-2 gap-4">
+                <Field label="Minimum Calculated Amount" hint="Clamps the raw result up to this floor before sign/rounding — e.g. a 2% fee that's never less than ₹5,000.">
+                  <TextInput type="number" value={form.minChargeAmount ?? ''} onChange={(e) => set('minChargeAmount', e.target.value === '' ? undefined : Number(e.target.value))} placeholder="₹" />
+                </Field>
+                <Field label="Maximum Calculated Amount" hint="Clamps the raw result down to this ceiling before sign/rounding.">
+                  <TextInput type="number" value={form.maxChargeAmount ?? ''} onChange={(e) => set('maxChargeAmount', e.target.value === '' ? undefined : Number(e.target.value))} placeholder="₹" />
+                </Field>
+              </div>
+            )}
+          </div>
+
           {showLegacyBasisFields && form.calcBasis === 'SLAB' && (
             <div className="mt-4 rounded-xl border border-slate-200 p-4">
               <div className="mb-2 flex items-center justify-between">
@@ -506,68 +575,16 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
                     </button>
                   </div>
                 ))}
-                {form.slabTable.length === 0 && <div className="text-[12.5px] text-slate-400">No slab rows yet — this condition predates the Slab / Tier mode in §5; switch Calculate On to "Slab / Tier" to use the new builder instead.</div>}
+                {form.slabTable.length === 0 && <div className="text-[12.5px] text-slate-400">No slab rows yet — this condition predates the Slab / Tier mode above; switch Calculate On to "Slab / Tier" to use the new builder instead.</div>}
               </div>
             </div>
           )}
         </section>
 
-        {/* Section 3 — Tax */}
+        {/* Section 3 — Vendor & Ownership */}
         <section>
-          <div className="section-title mb-3">3 · Tax</div>
+          <div className="section-title mb-3">3 · Vendor & Ownership</div>
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Code Type" required>
-              <SelectInput value={form.codeType} onChange={(v) => set('codeType', v as ConditionMaster['codeType'])} options={[{ value: 'HSN', label: 'HSN — Goods' }, { value: 'SAC', label: 'SAC — Services' }]} />
-            </Field>
-            <Field label={`${form.codeType} Code`} required={form.gstTreatment !== 'EXEMPT' && form.gstTreatment !== 'NIL_RATED'}>
-              <SelectInput value={form.taxCode ?? ''} onChange={(v) => set('taxCode', v)} placeholder={`Select ${form.codeType}`} options={taxOptions.map((t) => ({ value: t.code, label: `${t.code} — ${t.description}` }))} />
-            </Field>
-            <Field label="GST Rate" hint="Derived, read-only — looked up from the tax master. Override requires a reason and writes an audit entry.">
-              <div className="flex items-center gap-2">
-                <TextInput value={gstOverride ? undefined : `${selectedTax?.gstRate ?? '—'}%`} readOnly className="!bg-slate-100" />
-                {gstOverride && <TextInput type="number" placeholder="Override %" className="!bg-amber-50" />}
-                <button type="button" onClick={() => setGstOverride((v) => !v)} className="whitespace-nowrap text-[12px] font-semibold text-indigo-brand">
-                  {gstOverride ? 'Cancel' : 'Override'}
-                </button>
-              </div>
-            </Field>
-            <Field label="GST Treatment" required>
-              <SelectInput
-                value={form.gstTreatment}
-                onChange={(v) => set('gstTreatment', v as ConditionMaster['gstTreatment'])}
-                options={Object.entries(GST_TREATMENT_LABELS).map(([value, label]) => ({ value, label }))}
-              />
-            </Field>
-            {form.gstTreatment === 'DEDUCTIBLE' && (
-              <Field label="ITC Eligibility %" hint="Supports partial credit where the business makes both taxable and exempt supplies.">
-                <TextInput type="number" min={0} max={100} value={form.itcEligibilityPct} onChange={(e) => set('itcEligibilityPct', Number(e.target.value))} />
-              </Field>
-            )}
-            <Field label="Tax calculated on" required hint="Same dependency engine as every condition — 'Condition + selected' cascades GST onto whichever conditions this one's rule already references.">
-              <SelectInput
-                value={form.taxCalculatedOn}
-                onChange={(v) => set('taxCalculatedOn', v as ConditionMaster['taxCalculatedOn'])}
-                options={[{ value: 'CONDITION_AMOUNT', label: 'Condition amount' }, { value: 'CONDITION_PLUS_SELECTED', label: 'Condition + selected conditions' }]}
-              />
-            </Field>
-            <Field label="TDS applicable">
-              <Toggle checked={form.tdsApplicable} onChange={(v) => set('tdsApplicable', v)} />
-            </Field>
-            {form.tdsApplicable && (
-              <Field label="TDS Section">
-                <TextInput value={form.tdsSection ?? ''} onChange={(e) => set('tdsSection', e.target.value)} placeholder="194Q" />
-              </Field>
-            )}
-          </div>
-        </section>
-
-        {/* Section 4 — Vendor & Ownership */}
-        <section>
-          <div className="section-title mb-3">4 · Vendor & Ownership</div>
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Default Vendor">
-              <SelectInput value={form.defaultVendorId ?? ''} onChange={(v) => set('defaultVendorId', v)} placeholder="None" options={VENDORS.map((v) => ({ value: v.id, label: v.name }))} />
-            </Field>
             <Field label="Vendor Rule" required hint={CATEGORY_PRESETS[form.category].vendorRule !== 'EITHER' ? 'Preset by category — enforced as a hard validation at PO save (P1/P2).' : undefined}>
               <SelectInput
                 value={form.vendorRule}
@@ -576,102 +593,57 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
                 options={Object.entries(VENDOR_RULE_LABELS).map(([value, label]) => ({ value, label }))}
               />
             </Field>
-            <Field label="Vendor Group filter" className="col-span-2" hint="Restricts the vendor picker on the PO form.">
-              <MultiChipSelect value={form.vendorGroupFilter} onChange={(v) => set('vendorGroupFilter', v)} options={VENDOR_GROUPS.map((g) => ({ value: g, label: g }))} />
-            </Field>
-            <Field label="Default Condition Invoice Owner">
-              <TextInput value={form.defaultInvoiceOwner ?? ''} onChange={(e) => set('defaultInvoiceOwner', e.target.value)} placeholder="e.g. Logistics Desk" />
-            </Field>
-            <Field label={form.requiresServiceConfirmation ? 'Service Confirmation Owner' : 'Default Condition GRN Owner'}>
-              <TextInput value={form.defaultConfirmationOwner ?? ''} onChange={(e) => set('defaultConfirmationOwner', e.target.value)} placeholder="e.g. Warehouse Team" />
-            </Field>
           </div>
         </section>
 
-        {/* Section 5 — Advanced Settings */}
-        <Accordion title="5 · Advanced Settings" subtitle="Calculate-On rule, capitalisation, confirmation & applicability rules">
+        {/* Section 4 — Advanced Settings (Tax + capitalisation/confirmation/applicability rules) */}
+        <Accordion title="4 · Advanced Settings" subtitle="Tax, GRN confirmation & applicability rules">
           <div className="space-y-6">
             <div>
-              <Field
-                label="Calculate On"
-                required
-                hint="No Sequence No. — calculation order is derived automatically from which conditions this rule references."
-              >
-                <SelectInput
-                  value={form.calculationMode ?? 'BASE'}
-                  onChange={(v) => setCalcMode(v as CalculationMode)}
-                  options={(Object.keys(CALCULATION_MODE_LABELS) as CalculationMode[]).map((m) => ({ value: m, label: CALCULATION_MODE_LABELS[m] }))}
-                />
-              </Field>
-
-              <div className="mt-3">
-                {form.calculationRule?.mode === 'BASE' && (
-                  <FormulaRuleBuilder value={form.calculationRule.base} uomOptions={allUomOptions} onChange={(f) => setRule({ mode: 'BASE', base: f })} previewLabel="Condition" />
-                )}
-                {form.calculationRule?.mode === 'DIRECT' && (
-                  <FormulaRuleBuilder value={form.calculationRule.direct} uomOptions={allUomOptions} onChange={(f) => setRule({ mode: 'DIRECT', direct: f })} previewLabel="Condition" />
-                )}
-                {form.calculationRule?.mode === 'SELECTED_CONDITIONS' && (
-                  <SelectedConditionsBuilder
-                    steps={form.calculationRule.selected.steps}
-                    options={[{ value: BASE_STEP, label: 'BASE (line value)' }, ...otherConditionOptions]}
-                    onChange={(steps) => setRule({ mode: 'SELECTED_CONDITIONS', selected: { steps } })}
-                  />
-                )}
-                {form.calculationRule?.mode === 'CONDITIONAL' && (
-                  <ConditionalRuleBuilder
-                    rule={form.calculationRule.conditional}
-                    conditionOptions={otherConditionOptions}
-                    uomOptions={allUomOptions}
-                    onChange={(conditional) => setRule({ mode: 'CONDITIONAL', conditional })}
-                  />
-                )}
-                {form.calculationRule?.mode === 'SLAB' && (
-                  <SlabRuleBuilder rule={form.calculationRule.slab} onChange={(slab) => setRule({ mode: 'SLAB', slab })} />
-                )}
-                {form.calculationRule?.mode === 'CUMULATIVE' && (
-                  <CumulativeRuleBuilder rule={form.calculationRule.cumulative} onChange={(cumulative) => setRule({ mode: 'CUMULATIVE', cumulative })} />
-                )}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <Field label="Include in Item Landed Cost">
-                <Toggle checked={form.capitalise} onChange={(v) => set('capitalise', v)} />
-              </Field>
-              <Field label="Allowed Level" required>
-                <SelectInput
-                  value={form.allowedLevel}
-                  onChange={(v) => set('allowedLevel', v as ConditionMaster['allowedLevel'])}
-                  options={[{ value: 'LINE', label: 'Line only' }, { value: 'HEADER', label: 'Header only' }, { value: 'BOTH', label: 'Both' }]}
-                />
-              </Field>
-              {form.allowedLevel !== 'LINE' && (
-                <Field label="Distribution Basis" hint="How a header condition explodes across lines. Wrong basis produces wrong landed cost.">
+              <div className="mb-2 text-[13px] font-bold text-slate-700">Tax</div>
+              <div className="grid grid-cols-2 gap-4">
+                <Field label="HSN/SAC Code" required>
                   <SelectInput
-                    value={form.distributionBasis ?? 'VALUE'}
-                    onChange={(v) => set('distributionBasis', v as ConditionMaster['distributionBasis'])}
-                    options={Object.entries(DISTRIBUTION_LABELS).map(([value, label]) => ({ value, label }))}
+                    value={form.taxCode ?? ''}
+                    onChange={(v) => {
+                      const entry = TAX_MASTER.find((t) => t.code === v);
+                      setForm((f) => ({ ...f, taxCode: v, codeType: entry?.codeType ?? f.codeType }));
+                    }}
+                    placeholder="Select HSN/SAC Code"
+                    options={combinedTaxOptions}
                   />
                 </Field>
-              )}
-            </div>
-
-            <div>
-              <div className="mb-2 flex items-center justify-between">
-                <div className="text-[13px] font-bold text-slate-700">Minimum / Maximum Calculated Amount</div>
-                <Toggle checked={minMaxChargeOpen} onChange={(v) => { setMinMaxChargeOpen(v); if (!v) { set('minChargeAmount', undefined); set('maxChargeAmount', undefined); } }} />
+                <Field label="GST Rate" hint="Derived, read-only — looked up from the tax master. Override requires a reason and writes an audit entry.">
+                  <div className="flex items-center gap-2">
+                    <TextInput value={gstOverride ? undefined : `${selectedTax?.gstRate ?? '—'}%`} readOnly className="!bg-slate-100" />
+                    {gstOverride && <TextInput type="number" placeholder="Override %" className="!bg-amber-50" />}
+                    <button type="button" onClick={() => setGstOverride((v) => !v)} className="whitespace-nowrap text-[12px] font-semibold text-indigo-brand">
+                      {gstOverride ? 'Cancel' : 'Override'}
+                    </button>
+                  </div>
+                </Field>
+                {form.gstTreatment === 'DEDUCTIBLE' && (
+                  <Field label="ITC Eligibility %" hint="Supports partial credit where the business makes both taxable and exempt supplies.">
+                    <TextInput type="number" min={0} max={100} value={form.itcEligibilityPct} onChange={(e) => set('itcEligibilityPct', Number(e.target.value))} />
+                  </Field>
+                )}
+                <Field label="TDS applicable">
+                  <Toggle checked={form.tdsApplicable} onChange={(v) => set('tdsApplicable', v)} />
+                </Field>
+                {form.tdsApplicable && (
+                  <Field label="TDS Section">
+                    <TextInput value={form.tdsSection ?? ''} onChange={(e) => set('tdsSection', e.target.value)} placeholder="194Q" />
+                  </Field>
+                )}
+                <Field label="TCS applicable">
+                  <Toggle checked={form.tcsApplicable} onChange={(v) => set('tcsApplicable', v)} />
+                </Field>
+                {form.tcsApplicable && (
+                  <Field label="TCS Section">
+                    <TextInput value={form.tcsSection ?? ''} onChange={(e) => set('tcsSection', e.target.value)} placeholder="206C" />
+                  </Field>
+                )}
               </div>
-              {minMaxChargeOpen && (
-                <div className="grid grid-cols-2 gap-4">
-                  <Field label="Minimum Calculated Amount" hint="Clamps the raw result up to this floor before sign/rounding — e.g. a 2% fee that's never less than ₹5,000.">
-                    <TextInput type="number" value={form.minChargeAmount ?? ''} onChange={(e) => set('minChargeAmount', e.target.value === '' ? undefined : Number(e.target.value))} placeholder="₹" />
-                  </Field>
-                  <Field label="Maximum Calculated Amount" hint="Clamps the raw result down to this ceiling before sign/rounding.">
-                    <TextInput type="number" value={form.maxChargeAmount ?? ''} onChange={(e) => set('maxChargeAmount', e.target.value === '' ? undefined : Number(e.target.value))} placeholder="₹" />
-                  </Field>
-                </div>
-              )}
             </div>
 
             <div className="grid grid-cols-2 gap-4">
@@ -747,13 +719,10 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
               <Field label="Applicability — Categories">
                 <MultiChipSelect value={form.applicabilityCategories} onChange={(v) => set('applicabilityCategories', v)} options={SPEND_CATEGORIES.map((c) => ({ value: c, label: c }))} />
               </Field>
-              <Field label="Applicability — Vendors">
-                <MultiChipSelect value={form.applicabilityVendors} onChange={(v) => set('applicabilityVendors', v)} options={VENDORS.map((v) => ({ value: v.id, label: v.name }))} />
-              </Field>
               <Field label="Mandatory for" hint="Forces the condition onto the PO for these Incoterms/categories.">
                 <MultiChipSelect value={form.mandatoryFor} onChange={(v) => set('mandatoryFor', v)} options={INCOTERMS.map((t) => ({ value: t, label: t }))} />
               </Field>
-              <Field label="Mutually exclusive with" className="col-span-2" hint="Whether this condition can be added at all — separate from how it's calculated above (§5).">
+              <Field label="Mutually exclusive with" className="col-span-2" hint="Whether this condition can be added at all — separate from how it's calculated above (§2).">
                 <MultiChipSelect
                   value={form.mutuallyExclusiveWith}
                   onChange={(v) => set('mutuallyExclusiveWith', v)}
@@ -780,10 +749,10 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
   );
 }
 
-function formulaPreview(f: FormulaRule): string {
+function formulaPreview(f: FormulaRule, baseLabel: string): string {
   switch (f.type) {
     case 'PERCENTAGE':
-      return `${f.value}% of Base`;
+      return `${f.value}% of ${baseLabel}`;
     case 'FIXED':
       return `₹${f.value.toLocaleString('en-IN')} Fixed`;
     case 'RATE_X_QTY':
@@ -797,16 +766,17 @@ function formulaPreview(f: FormulaRule): string {
 
 // Modes 1 (Base) & 3 (Direct Calculation) share this builder — both are a single
 // self-contained formula (Percentage / Fixed / Rate x Qty / Weight / Volume); the
-// redesign brief lists their capabilities identically. THEN/ELSE branches of a
-// CONDITIONAL rule reuse it too, so "IF... THEN 2% of Base" stays one formula shape.
+// redesign brief lists their capabilities identically.
 function FormulaRuleBuilder({
   value,
   uomOptions,
+  baseLabel,
   onChange,
   previewLabel,
 }: {
   value: FormulaRule;
   uomOptions: { value: string; label: string }[];
+  baseLabel: string;
   onChange: (f: FormulaRule) => void;
   previewLabel: string;
 }) {
@@ -823,7 +793,7 @@ function FormulaRuleBuilder({
         {showUom && <SelectInput value={value.uomId ?? ''} onChange={(v) => onChange({ ...value, uomId: v })} placeholder="UoM" options={uomOptions} />}
       </div>
       <div className="rounded-lg bg-indigo-50/70 px-2.5 py-1.5 font-mono text-[11.5px] text-indigo-700">
-        {previewLabel} = {formulaPreview(value)}
+        {previewLabel} = {formulaPreview(value, baseLabel)}
       </div>
     </div>
   );
@@ -838,13 +808,15 @@ function FormulaRuleBuilder({
 function SelectedConditionsBuilder({
   steps,
   options,
+  baseLabel,
   onChange,
 }: {
   steps: SelectedStep[];
   options: { value: string; label: string }[];
+  baseLabel: string;
   onChange: (steps: SelectedStep[]) => void;
 }) {
-  const labelFor = (code?: string) => (code === BASE_STEP || !code ? 'Base' : options.find((o) => o.value === code)?.label.split(' — ')[0] ?? code);
+  const labelFor = (code?: string) => (code === BASE_STEP || !code ? baseLabel : options.find((o) => o.value === code)?.label.split(' — ')[0] ?? code);
   const usedCodes = new Set(steps.map((s) => (s.source === 'BASE' ? BASE_STEP : s.conditionCode)));
   const availableToAdd = options.filter((o) => !usedCodes.has(o.value));
 
@@ -930,155 +902,58 @@ function SelectedConditionsBuilder({
   );
 }
 
-// Mode 4 — Conditional Rule: a flat IF/AND/OR chain (no operator precedence — a compact
-// chip-and-dropdown builder, not a formula language, per the redesign brief's §18) with a
-// THEN and an optional ELSE, each a FormulaRuleBuilder.
-function ConditionalRuleBuilder({
-  rule,
-  conditionOptions,
-  uomOptions,
-  onChange,
-}: {
-  rule: { clauses: RuleClause[]; then: FormulaRule; else?: FormulaRule };
-  conditionOptions: { value: string; label: string }[];
-  uomOptions: { value: string; label: string }[];
-  onChange: (rule: { clauses: RuleClause[]; then: FormulaRule; else?: FormulaRule }) => void;
-}) {
-  const fieldOptions = [
-    ...PO_RULE_FIELDS.map((f) => ({ key: ruleFieldKey({ source: f.source, field: f.field }), field: { source: f.source, field: f.field } as RuleField, label: `PO — ${f.label}` })),
-    ...LINE_RULE_FIELDS.map((f) => ({ key: ruleFieldKey({ source: f.source, field: f.field }), field: { source: f.source, field: f.field } as RuleField, label: `Line — ${f.label}` })),
-    ...conditionOptions.map((c) => ({ key: ruleFieldKey({ source: 'CONDITION', field: c.value }), field: { source: 'CONDITION', field: c.value } as RuleField, label: `Condition — ${c.label}` })),
-  ];
-  const operators: ComparisonOperator[] = ['=', '!=', '>', '<', '>=', '<=', 'IN', 'NOT_IN', 'BETWEEN', 'IS_EMPTY', 'IS_NOT_EMPTY'];
 
-  const updateClause = (i: number, patch: Partial<RuleClause>) => onChange({ ...rule, clauses: rule.clauses.map((c, idx) => (idx === i ? { ...c, ...patch } : c)) });
-  const removeClause = (i: number) => onChange({ ...rule, clauses: rule.clauses.filter((_, idx) => idx !== i) });
-  const addClause = () => onChange({ ...rule, clauses: [...rule.clauses, { field: { source: 'PO', field: 'baseAmount' }, operator: '>', value: 0, join: 'AND' }] });
-
-  return (
-    <div className="space-y-3 rounded-xl border border-slate-200 p-3.5">
-      <div className="space-y-2">
-        {rule.clauses.map((c, i) => (
-          <div key={i} className="space-y-1.5">
-            {i > 0 && (
-              <div className="flex gap-1.5">
-                {(['AND', 'OR'] as const).map((j) => (
-                  <button
-                    key={j}
-                    type="button"
-                    onClick={() => updateClause(i - 1, { join: j })}
-                    className={`rounded px-2 py-0.5 text-[10.5px] font-bold ${rule.clauses[i - 1].join === j || (!rule.clauses[i - 1].join && j === 'AND') ? 'bg-indigo-brand text-white' : 'bg-slate-100 text-slate-500'}`}
-                  >
-                    {j}
-                  </button>
-                ))}
-              </div>
-            )}
-            <div className="flex flex-wrap items-center gap-1.5">
-              {i === 0 && <span className="text-[11px] font-bold uppercase tracking-wide text-slate-400">If</span>}
-              <select
-                value={ruleFieldKey(c.field)}
-                onChange={(e) => {
-                  const opt = fieldOptions.find((o) => o.key === e.target.value);
-                  if (opt) updateClause(i, { field: opt.field });
-                }}
-                className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[12px] outline-none"
-              >
-                {fieldOptions.map((o) => (
-                  <option key={o.key} value={o.key}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={c.operator}
-                onChange={(e) => updateClause(i, { operator: e.target.value as ComparisonOperator })}
-                className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[12px] outline-none"
-              >
-                {operators.map((op) => (
-                  <option key={op} value={op}>
-                    {COMPARISON_OPERATOR_LABELS[op]}
-                  </option>
-                ))}
-              </select>
-              {!['IS_EMPTY', 'IS_NOT_EMPTY'].includes(c.operator) && (
-                c.operator === 'BETWEEN' ? (
-                  <>
-                    <TextInput
-                      className="!w-20"
-                      value={Array.isArray(c.value) ? c.value[0] : ''}
-                      onChange={(e) => updateClause(i, { value: [e.target.value, Array.isArray(c.value) ? c.value[1] : ''] })}
-                      placeholder="From"
-                    />
-                    <TextInput
-                      className="!w-20"
-                      value={Array.isArray(c.value) ? c.value[1] : ''}
-                      onChange={(e) => updateClause(i, { value: [Array.isArray(c.value) ? c.value[0] : '', e.target.value] })}
-                      placeholder="To"
-                    />
-                  </>
-                ) : (
-                  <TextInput className="!w-28" value={Array.isArray(c.value) ? '' : c.value ?? ''} onChange={(e) => updateClause(i, { value: e.target.value })} placeholder="Value" />
-                )
-              )}
-              <button type="button" onClick={() => removeClause(i)} className="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-500">
-                <X size={12} />
-              </button>
-            </div>
-          </div>
-        ))}
-        <button type="button" onClick={addClause} className="flex items-center gap-1 text-[12px] font-semibold text-indigo-brand">
-          <Plus size={13} /> Add clause
-        </button>
-      </div>
-
-      <div>
-        <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-400">Then</div>
-        <FormulaRuleBuilder value={rule.then} uomOptions={uomOptions} onChange={(then) => onChange({ ...rule, then })} previewLabel="Condition" />
-      </div>
-
-      <div>
-        <div className="mb-1 flex items-center justify-between">
-          <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Else</div>
-          <Toggle checked={!!rule.else} onChange={(v) => onChange({ ...rule, else: v ? { type: 'PERCENTAGE', value: 0 } : undefined })} />
-        </div>
-        {rule.else && <FormulaRuleBuilder value={rule.else} uomOptions={uomOptions} onChange={(elseRule) => onChange({ ...rule, else: elseRule })} previewLabel="Condition" />}
-      </div>
-    </div>
-  );
-}
-
+// `dateMode` renders From/To as date pickers (used when a Slab's Based On is Date Range) —
+// the underlying SlabTier.from/to still store plain numbers (epoch ms), so tier matching
+// and overlap validation work unchanged; only the input widget and default step differ.
 function TierTable({
   tiers,
   onChange,
+  dateMode,
 }: {
   tiers: SlabTier[];
   onChange: (tiers: SlabTier[]) => void;
+  dateMode?: boolean;
 }) {
+  const dayMs = 24 * 60 * 60 * 1000;
   const addTier = () => {
     const last = tiers.at(-1);
-    onChange([...tiers, { id: uid('tier'), from: last?.to ?? 0, to: (last?.to ?? 0) + 100, rateType: 'FLAT_PER_UNIT', rate: 0 }]);
+    const from = last?.to ?? (dateMode ? Date.now() : 0);
+    const to = dateMode ? from + 30 * dayMs : from + 100;
+    onChange([...tiers, { id: uid('tier'), from, to, rateType: dateMode ? 'PERCENTAGE' : 'FLAT_PER_UNIT', rate: 0 }]);
   };
   const updateTier = (id: string, patch: Partial<SlabTier>) => onChange(tiers.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   const removeTier = (id: string) => onChange(tiers.filter((t) => t.id !== id));
 
+  const toDateInput = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+  const fromDateInput = (v: string) => new Date(v).getTime();
+
   return (
     <div className="space-y-2">
       <div className="grid grid-cols-[1fr_1fr_1fr_1fr_auto] gap-2 text-[10.5px] font-bold uppercase tracking-wide text-slate-400">
-        <div>From</div>
-        <div>To (blank = open-ended)</div>
+        <div>{dateMode ? 'From date' : 'From'}</div>
+        <div>{dateMode ? 'To date (blank = open-ended)' : 'To (blank = open-ended)'}</div>
         <div>Rate Type</div>
         <div>Rate</div>
         <div></div>
       </div>
       {tiers.map((t) => (
         <div key={t.id} className="grid grid-cols-[1fr_1fr_1fr_1fr_auto] items-center gap-2">
-          <TextInput type="number" value={t.from} onChange={(e) => updateTier(t.id, { from: Number(e.target.value) })} />
-          <TextInput type="number" value={t.to ?? ''} onChange={(e) => updateTier(t.id, { to: e.target.value === '' ? null : Number(e.target.value) })} placeholder="1001+" />
+          {dateMode ? (
+            <>
+              <TextInput type="date" value={toDateInput(t.from)} onChange={(e) => updateTier(t.id, { from: fromDateInput(e.target.value) })} />
+              <TextInput type="date" value={t.to != null ? toDateInput(t.to) : ''} onChange={(e) => updateTier(t.id, { to: e.target.value === '' ? null : fromDateInput(e.target.value) })} />
+            </>
+          ) : (
+            <>
+              <TextInput type="number" value={t.from} onChange={(e) => updateTier(t.id, { from: Number(e.target.value) })} />
+              <TextInput type="number" value={t.to ?? ''} onChange={(e) => updateTier(t.id, { to: e.target.value === '' ? null : Number(e.target.value) })} placeholder="1001+" />
+            </>
+          )}
           <SelectInput
             value={t.rateType}
             onChange={(v) => updateTier(t.id, { rateType: v as SlabTier['rateType'] })}
-            options={[{ value: 'FLAT_PER_UNIT', label: '₹ per unit' }, { value: 'PERCENTAGE', label: '%' }]}
+            options={dateMode ? [{ value: 'PERCENTAGE', label: '%' }, { value: 'FLAT_PER_UNIT', label: '₹ flat' }] : [{ value: 'FLAT_PER_UNIT', label: '₹ per unit' }, { value: 'PERCENTAGE', label: '%' }]}
           />
           <TextInput type="number" value={t.rate} onChange={(e) => updateTier(t.id, { rate: Number(e.target.value) })} />
           <button onClick={() => removeTier(t.id)} className="rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-500">
@@ -1095,14 +970,15 @@ function TierTable({
 }
 
 // Mode 5 — Slab / Tier: range-based pricing, matched by whichever basis the master picks
-// (quantity, weight, volume, this line's base, or the whole PO's base).
+// (quantity, weight, volume, this line's base, the whole PO's base, or a date range —
+// e.g. a seasonal freight rate).
 function SlabRuleBuilder({ rule, onChange }: { rule: { basis: SlabBasis; tiers: SlabTier[] }; onChange: (r: { basis: SlabBasis; tiers: SlabTier[] }) => void }) {
   return (
     <div className="space-y-3 rounded-xl border border-slate-200 p-3.5">
       <Field label="Based On">
-        <SelectInput value={rule.basis} onChange={(v) => onChange({ ...rule, basis: v as SlabBasis })} options={(Object.keys(SLAB_BASIS_LABELS) as SlabBasis[]).map((b) => ({ value: b, label: SLAB_BASIS_LABELS[b] }))} />
+        <SelectInput value={rule.basis} onChange={(v) => onChange({ ...rule, basis: v as SlabBasis, tiers: [] })} options={(Object.keys(SLAB_BASIS_LABELS) as SlabBasis[]).map((b) => ({ value: b, label: SLAB_BASIS_LABELS[b] }))} />
       </Field>
-      <TierTable tiers={rule.tiers} onChange={(tiers) => onChange({ ...rule, tiers })} />
+      <TierTable tiers={rule.tiers} onChange={(tiers) => onChange({ ...rule, tiers })} dateMode={rule.basis === 'DATE_RANGE'} />
     </div>
   );
 }

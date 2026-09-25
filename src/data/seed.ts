@@ -110,6 +110,8 @@ function makeCondition(c: {
     taxCalculatedOn: 'CONDITION_AMOUNT',
     tdsApplicable: false,
     tdsSection: undefined,
+    tcsApplicable: false,
+    tcsSection: undefined,
 
     defaultVendorId: undefined,
     vendorRule: preset.vendorRule!,
@@ -289,6 +291,7 @@ export const CONDITION_MASTER: ConditionMaster[] = [
       taxCode: '997212',
       codeType: 'SAC',
       defaultVendorId: 'ven-lastmile',
+      vendorGroupFilter: ['Logistics & Freight'],
       allowedLevel: 'LINE',
       distributionBasis: undefined,
     },
