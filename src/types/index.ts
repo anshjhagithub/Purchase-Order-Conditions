@@ -82,6 +82,13 @@ export const DISTRIBUTION_LABELS: Record<DistributionBasis, string> = {
   EQUAL: 'Equal split',
 };
 
+export type InvoiceLevel = 'LINE_ITEM' | 'ADDITIONAL_CHARGE' | 'DISCOUNT';
+export const INVOICE_LEVEL_LABELS: Record<InvoiceLevel, string> = {
+  LINE_ITEM: 'Line Item',
+  ADDITIONAL_CHARGE: 'Additional Charge',
+  DISCOUNT: 'Discount',
+};
+
 export type RoundingRule = 'NORMAL' | 'UP' | 'DOWN' | 'NONE';
 export type ReleaseTrigger = 'MANUAL' | 'WARRANTY_EXPIRY' | 'COMMISSIONING' | 'ON_DATE';
 export type ConfirmationMode = 'PROPORTIONAL' | 'FULL_ON_FIRST_GRN';
@@ -303,8 +310,13 @@ export interface ConditionMaster {
   autoConfirmOnMainGrn: boolean;
   confirmationOnPartialGrn: ConfirmationMode;
   // Gates condition-GRN creation independently of Requires Service Confirmation: when true,
-  // a GRN for this condition cannot be created until the underlying PO line has an item GRN.
-  lineItemGrnRequired: boolean;
+  // a GRN for this condition cannot be created until the underlying PO line has an item GRN
+  // (renamed from lineItemGrnRequired — same semantics).
+  parentGrnRequired: boolean;
+  // Whether this condition participates in the GRN workflow at all — false means it never
+  // shows up as something to confirm/GRN (e.g. a discount).
+  grnRequired: boolean;
+  invoiceLevel: InvoiceLevel;
   rateEditableOnPo: boolean;
   vendorEditableOnPo: boolean;
   minValue?: number;
@@ -423,7 +435,8 @@ export interface AppliedCondition {
   requiresServiceConfirmation: boolean;
   autoConfirmOnMainGrn: boolean;
   confirmationMode: ConfirmationMode;
-  lineItemGrnRequired: boolean;
+  parentGrnRequired: boolean;
+  grnRequired: boolean;
   status: AppliedConditionStatus;
   confirmedPct: number; // 0-100
   notes?: string;

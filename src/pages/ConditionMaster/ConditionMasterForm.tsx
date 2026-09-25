@@ -13,6 +13,7 @@ import {
   CALC_BASIS_RATE_LABEL,
   VENDOR_RULE_LABELS,
   DISTRIBUTION_LABELS,
+  INVOICE_LEVEL_LABELS,
   CALCULATION_MODE_LABELS,
   FORMULA_TYPE_LABELS,
   SLAB_BASIS_LABELS,
@@ -158,7 +159,9 @@ function emptyCondition(): ConditionMaster {
     requiresServiceConfirmation: preset.requiresServiceConfirmation!,
     autoConfirmOnMainGrn: false,
     confirmationOnPartialGrn: 'PROPORTIONAL',
-    lineItemGrnRequired: preset.lineItemGrnRequired!,
+    parentGrnRequired: preset.parentGrnRequired!,
+    grnRequired: true,
+    invoiceLevel: 'ADDITIONAL_CHARGE',
     rateEditableOnPo: preset.rateEditableOnPo!,
     vendorEditableOnPo: true,
     minValue: undefined,
@@ -214,7 +217,8 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
       vendorRule: preset.vendorRule!,
       capitalise: preset.capitalise!,
       requiresServiceConfirmation: preset.requiresServiceConfirmation!,
-      lineItemGrnRequired: preset.lineItemGrnRequired!,
+      parentGrnRequired: preset.parentGrnRequired!,
+      invoiceLevel: category === 'DISC' || category === 'DEDN' ? 'DISCOUNT' : 'ADDITIONAL_CHARGE',
       rateEditableOnPo: preset.rateEditableOnPo!,
       allowedLevel: preset.allowedLevel!,
       calculateOn: preset.calculateOn ?? 'LINE_BASE',
@@ -287,7 +291,6 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
       }
       if (sorted.length === 0) errs.push('At least one slab row is required when basis is Slab / scale.');
     }
-    if (form.minValue != null && form.maxValue != null && form.minValue > form.maxValue) errs.push('Min Value cannot exceed Max Value.');
     if (form.minChargeAmount != null && form.maxChargeAmount != null && form.minChargeAmount > form.maxChargeAmount)
       errs.push('Minimum Calculated Amount cannot exceed Maximum Calculated Amount.');
 
@@ -420,9 +423,10 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
             <Field label="Description" className="col-span-2">
               <TextArea rows={2} value={form.description ?? ''} onChange={(e) => set('description', e.target.value)} placeholder="Shown as helper text in the picker and printed on the PO PDF if enabled." />
             </Field>
-            <Field label="Print on PO PDF">
+            <div className="col-span-2 flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5">
+              <span className="text-[13px] font-medium text-slate-700">Print on PO PDF</span>
               <Toggle checked={form.printOnPdf} onChange={(v) => set('printOnPdf', v)} />
-            </Field>
+            </div>
           </div>
         </section>
 
@@ -530,7 +534,7 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
                 <SelectInput
                   value={form.distributionBasis ?? 'VALUE'}
                   onChange={(v) => set('distributionBasis', v as ConditionMaster['distributionBasis'])}
-                  options={Object.entries(DISTRIBUTION_LABELS).map(([value, label]) => ({ value, label }))}
+                  options={(['VALUE', 'EQUAL'] as const).map((value) => ({ value, label: DISTRIBUTION_LABELS[value] }))}
                 />
               </Field>
             )}
@@ -622,11 +626,6 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
                     </button>
                   </div>
                 </Field>
-                {form.gstTreatment === 'DEDUCTIBLE' && (
-                  <Field label="ITC Eligibility %" hint="Supports partial credit where the business makes both taxable and exempt supplies.">
-                    <TextInput type="number" min={0} max={100} value={form.itcEligibilityPct} onChange={(e) => set('itcEligibilityPct', Number(e.target.value))} />
-                  </Field>
-                )}
                 <Field label="TDS applicable">
                   <Toggle checked={form.tdsApplicable} onChange={(v) => set('tdsApplicable', v)} />
                 </Field>
@@ -647,10 +646,23 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
             </div>
 
             <div className="grid grid-cols-2 gap-4">
-              <Field label="Line Item GRN Required" hint="When on, a GRN for this condition can only be created after the underlying item GRN.">
-                <Toggle checked={form.lineItemGrnRequired} onChange={(v) => set('lineItemGrnRequired', v)} />
+              <Field label="Invoice Level" required hint="How this condition is classified for invoice matching.">
+                <SelectInput
+                  value={form.invoiceLevel}
+                  onChange={(v) => set('invoiceLevel', v as ConditionMaster['invoiceLevel'])}
+                  options={(Object.keys(INVOICE_LEVEL_LABELS) as ConditionMaster['invoiceLevel'][]).map((v) => ({ value: v, label: INVOICE_LEVEL_LABELS[v] }))}
+                />
               </Field>
-              {form.lineItemGrnRequired && (
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Parent GRN required" hint="When on, a GRN for this condition can only be created after the underlying item GRN.">
+                <Toggle checked={form.parentGrnRequired} onChange={(v) => set('parentGrnRequired', v)} />
+              </Field>
+              <Field label="GRN required" hint="When off, this condition never appears in the GRN workflow (e.g. a discount).">
+                <Toggle checked={form.grnRequired} onChange={(v) => set('grnRequired', v)} />
+              </Field>
+              {form.parentGrnRequired && (
                 <Field label="Confirmation on partial GRN" hint="How the condition amount is calculated when the item GRN is partial.">
                   <SelectInput
                     value={form.confirmationOnPartialGrn}
@@ -664,33 +676,6 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
               </Field>
               <Field label="Vendor editable on PO">
                 <Toggle checked={form.vendorEditableOnPo} onChange={(v) => set('vendorEditableOnPo', v)} />
-              </Field>
-              <Field label="Requires attachment">
-                <Toggle checked={form.requiresAttachment} onChange={(v) => set('requiresAttachment', v)} />
-              </Field>
-              <Field label="Reversible / Refundable">
-                <Toggle checked={form.reversible} onChange={(v) => set('reversible', v)} />
-              </Field>
-              {form.reversible && (
-                <Field label="Release trigger">
-                  <SelectInput
-                    value={form.releaseTrigger ?? 'MANUAL'}
-                    onChange={(v) => set('releaseTrigger', v as ConditionMaster['releaseTrigger'])}
-                    options={[{ value: 'MANUAL', label: 'Manual' }, { value: 'WARRANTY_EXPIRY', label: 'On warranty expiry' }, { value: 'COMMISSIONING', label: 'On commissioning' }, { value: 'ON_DATE', label: 'On date' }]}
-                  />
-                </Field>
-              )}
-            </div>
-
-            <div className="grid grid-cols-3 gap-4">
-              <Field label="Min Value" hint="Validates the RATE entered on the PO form — different from Minimum Calculated Amount above, which clamps the result.">
-                <TextInput type="number" value={form.minValue ?? ''} onChange={(e) => set('minValue', e.target.value === '' ? undefined : Number(e.target.value))} />
-              </Field>
-              <Field label="Max Value">
-                <TextInput type="number" value={form.maxValue ?? ''} onChange={(e) => set('maxValue', e.target.value === '' ? undefined : Number(e.target.value))} />
-              </Field>
-              <Field label="Approval threshold">
-                <TextInput type="number" value={form.approvalThreshold ?? ''} onChange={(e) => set('approvalThreshold', e.target.value === '' ? undefined : Number(e.target.value))} />
               </Field>
             </div>
 
@@ -721,13 +706,6 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
               </Field>
               <Field label="Mandatory for" hint="Forces the condition onto the PO for these Incoterms/categories.">
                 <MultiChipSelect value={form.mandatoryFor} onChange={(v) => set('mandatoryFor', v)} options={INCOTERMS.map((t) => ({ value: t, label: t }))} />
-              </Field>
-              <Field label="Mutually exclusive with" className="col-span-2" hint="Whether this condition can be added at all — separate from how it's calculated above (§2).">
-                <MultiChipSelect
-                  value={form.mutuallyExclusiveWith}
-                  onChange={(v) => set('mutuallyExclusiveWith', v)}
-                  options={conditionMasters.filter((c) => c.id !== form.id).map((c) => ({ value: c.code, label: `${c.code} — ${c.name}` }))}
-                />
               </Field>
             </div>
 

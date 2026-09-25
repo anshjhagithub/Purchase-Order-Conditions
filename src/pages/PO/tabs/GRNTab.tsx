@@ -32,7 +32,7 @@ export function GRNTab({ po }: { po: PurchaseOrder }) {
   const conditionRows: ConditionRow[] = [
     ...po.lines.flatMap((line) => line.conditions.map((condition) => ({ line, condition }))),
     ...po.headerConditions.map((condition) => ({ line: null, condition })),
-  ];
+  ].filter((row) => row.condition.grnRequired);
 
   const confirmSideEffects = (line: POLine, deliveredQty: number): POLine => ({
     ...line,
@@ -75,7 +75,7 @@ export function GRNTab({ po }: { po: PurchaseOrder }) {
   const modalLine = po.lines.find((l) => l.id === grnLineId) ?? null;
 
   const openConditionGrn = (row: ConditionRow) => {
-    if (row.condition.lineItemGrnRequired && !hasItemGrn(po, row)) {
+    if (row.condition.parentGrnRequired && !hasItemGrn(po, row)) {
       setConditionGrnError('Item GRN is required before creating a GRN for this condition.');
       return;
     }
@@ -314,11 +314,11 @@ export function GRNTab({ po }: { po: PurchaseOrder }) {
               <p className="mt-2 text-[11.5px] text-slate-400">Auto-confirms service conditions per their confirmation mode (§5.7 / §5.8).</p>
             </div>
 
-            {modalLine.conditions.length > 0 && (
+            {modalLine.conditions.filter((c) => c.grnRequired).length > 0 && (
               <div>
                 <div className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-slate-400">Conditions on this line</div>
                 <div className="space-y-2">
-                  {modalLine.conditions.map((c) => {
+                  {modalLine.conditions.filter((c) => c.grnRequired).map((c) => {
                     const isQtyLinked = c.calcBasis === 'RATE_X_QTY' || c.calcBasis === 'RATE_X_WEIGHT' || c.calcBasis === 'RATE_X_VOLUME';
                     const enteredQty = Number(grnQty) || 0;
                     const plannedAmount = computeConditionAmount(c, {
@@ -390,7 +390,7 @@ export function GRNTab({ po }: { po: PurchaseOrder }) {
         const { line, condition: c } = grnConditionRow;
         const isPartialItemGrn = !!line && line.deliveredQty > 0 && line.deliveredQty < line.qty;
         const grnAmount =
-          line && c.lineItemGrnRequired && isPartialItemGrn
+          line && c.parentGrnRequired && isPartialItemGrn
             ? computeConditionAmount(c, {
                 lineBaseValue: line.qty * line.unitPrice,
                 lineQty: c.confirmationMode === 'FULL_ON_FIRST_GRN' ? line.qty : line.deliveredQty,
