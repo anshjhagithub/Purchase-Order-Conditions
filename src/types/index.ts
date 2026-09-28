@@ -101,6 +101,14 @@ export interface SlabRow {
   rate: number;
 }
 
+// Free-form key/value tag on a Condition Master — replaces the old fixed "Mandatory for"
+// (Incoterm-only) multi-select with an open-ended tagging scheme.
+export interface CustomTag {
+  id: string;
+  key: string;
+  value: string;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Calculate-On rule model (replaces Sequence No.) — dependency order is
 // derived purely from which condition codes a rule *references*, never from
@@ -325,7 +333,7 @@ export interface ConditionMaster {
   applicabilityEntities: string[];
   applicabilityCategories: string[];
   applicabilityVendors: string[];
-  mandatoryFor: string[];
+  customTags: CustomTag[];
   mutuallyExclusiveWith: string[];
   requiresAttachment: boolean;
   reversible: boolean;

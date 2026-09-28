@@ -23,6 +23,7 @@ import {
   type CalculationBasis,
   type ConditionMaster,
   type SlabRow,
+  type CustomTag,
   type CalculationMode,
   type CalculationRule,
   type FormulaRule,
@@ -36,7 +37,6 @@ import {
 import { AlertTriangle, Plus, Trash2, X } from 'lucide-react';
 
 const SPEND_CATEGORIES = ['Batteries', 'Electronics', 'Fabrication', 'Packaging Material', 'MRO', 'Petroleum'];
-const INCOTERMS = ['EXW', 'FOB', 'CIF', 'CFR', 'DAP', 'DDP'];
 
 const FORMULA_TYPE_FOR_CALC_BASIS: Record<CalculationBasis, FormulaType> = {
   FIXED_PER_PO: 'FIXED',
@@ -170,7 +170,7 @@ function emptyCondition(): ConditionMaster {
     applicabilityEntities: [],
     applicabilityCategories: [],
     applicabilityVendors: [],
-    mandatoryFor: [],
+    customTags: [],
     mutuallyExclusiveWith: [],
     requiresAttachment: false,
     reversible: false,
@@ -704,8 +704,8 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
               <Field label="Applicability — Categories">
                 <MultiChipSelect value={form.applicabilityCategories} onChange={(v) => set('applicabilityCategories', v)} options={SPEND_CATEGORIES.map((c) => ({ value: c, label: c }))} />
               </Field>
-              <Field label="Mandatory for" hint="Forces the condition onto the PO for these Incoterms/categories.">
-                <MultiChipSelect value={form.mandatoryFor} onChange={(v) => set('mandatoryFor', v)} options={INCOTERMS.map((t) => ({ value: t, label: t }))} />
+              <Field label="Custom Tags" className="col-span-2" hint="Free-form key/value metadata for this condition.">
+                <CustomTagsEditor tags={form.customTags} onChange={(customTags) => set('customTags', customTags)} />
               </Field>
             </div>
 
@@ -880,6 +880,31 @@ function SelectedConditionsBuilder({
   );
 }
 
+
+// Free-form key/value tags — "+ Add custom tag" appends a blank row with Key and Value
+// inputs, replacing the old fixed Incoterm-only "Mandatory for" multi-select.
+function CustomTagsEditor({ tags, onChange }: { tags: CustomTag[]; onChange: (tags: CustomTag[]) => void }) {
+  const addTag = () => onChange([...tags, { id: uid('tag'), key: '', value: '' }]);
+  const updateTag = (id: string, patch: Partial<CustomTag>) => onChange(tags.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+  const removeTag = (id: string) => onChange(tags.filter((t) => t.id !== id));
+
+  return (
+    <div className="space-y-2">
+      {tags.map((t) => (
+        <div key={t.id} className="grid grid-cols-[1fr_1fr_auto] items-center gap-2">
+          <TextInput value={t.key} onChange={(e) => updateTag(t.id, { key: e.target.value })} placeholder="Key" />
+          <TextInput value={t.value} onChange={(e) => updateTag(t.id, { value: e.target.value })} placeholder="Value" />
+          <button type="button" onClick={() => removeTag(t.id)} className="rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-500">
+            <X size={14} />
+          </button>
+        </div>
+      ))}
+      <button type="button" onClick={addTag} className="flex items-center gap-1 text-[12px] font-semibold text-indigo-brand">
+        <Plus size={13} /> Add custom tag
+      </button>
+    </div>
+  );
+}
 
 // `dateMode` renders From/To as date pickers (used when a Slab's Based On is Date Range) —
 // the underlying SlabTier.from/to still store plain numbers (epoch ms), so tier matching

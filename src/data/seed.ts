@@ -138,7 +138,7 @@ function makeCondition(c: {
     applicabilityEntities: [],
     applicabilityCategories: [],
     applicabilityVendors: [],
-    mandatoryFor: [],
+    customTags: [],
     mutuallyExclusiveWith: [],
     requiresAttachment: false,
     reversible: false,
