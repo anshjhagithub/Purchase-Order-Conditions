@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react';
 import { Modal } from '../../components/ui/Modal';
-import { Field, TextInput, TextArea, SelectInput, Toggle, Accordion, MultiChipSelect } from '../../components/ui/Form';
+import { Field, TextInput, TextArea, SelectInput, Toggle, Accordion } from '../../components/ui/Form';
 import { useData } from '../../context/DataContext';
 import { CATEGORY_PRESETS } from '../../data/categoryPresets';
 import { SUBCATEGORY_OPTIONS } from '../../data/subcategories';
-import { TAX_MASTER, UOMS, ENTITIES, INDEX_MASTER } from '../../data/seed';
+import { TAX_MASTER, UOMS, INDEX_MASTER } from '../../data/seed';
 import { BASE_STEP, detectCircularDependency } from '../../engine/calc';
 import { uid } from '../../data/ids';
 import {
@@ -36,7 +36,6 @@ import {
 } from '../../types';
 import { AlertTriangle, Plus, Trash2, X } from 'lucide-react';
 
-const SPEND_CATEGORIES = ['Batteries', 'Electronics', 'Fabrication', 'Packaging Material', 'MRO', 'Petroleum'];
 
 const FORMULA_TYPE_FOR_CALC_BASIS: Record<CalculationBasis, FormulaType> = {
   FIXED_PER_PO: 'FIXED',
@@ -195,7 +194,6 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
   });
   const [errors, setErrors] = useState<string[]>([]);
   const [gstOverride, setGstOverride] = useState(false);
-  const [minMaxChargeOpen, setMinMaxChargeOpen] = useState(!!(existing?.minChargeAmount != null || existing?.maxChargeAmount != null));
 
   const set = <K extends keyof ConditionMaster>(key: K, value: ConditionMaster[K]) => setForm((f) => ({ ...f, [key]: value }));
 
@@ -291,8 +289,6 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
       }
       if (sorted.length === 0) errs.push('At least one slab row is required when basis is Slab / scale.');
     }
-    if (form.minChargeAmount != null && form.maxChargeAmount != null && form.minChargeAmount > form.maxChargeAmount)
-      errs.push('Minimum Calculated Amount cannot exceed Maximum Calculated Amount.');
 
     // Rule-specific validation
     const rule = form.calculationRule;
@@ -432,7 +428,7 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
 
         {/* Section 2 — Calculation: everything that decides the amount, in one place —
             Calculate On (+ what it depends on), Rounding/Statistical, Include in Landed
-            Cost, Allowed Level, and the Min/Max Calculated Amount clamp. */}
+            Cost, and Allowed Level. */}
         <section>
           <div className="section-title mb-3">2 · Calculation</div>
 
@@ -530,30 +526,13 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
               />
             </Field>
             {form.allowedLevel !== 'LINE' && (
-              <Field label="Distribution Basis" hint="How a header condition explodes across lines. Wrong basis produces wrong landed cost.">
+              <Field label="Distribution Basis" className="col-span-2" hint="How a header condition explodes across lines. Wrong basis produces wrong landed cost.">
                 <SelectInput
                   value={form.distributionBasis ?? 'VALUE'}
                   onChange={(v) => set('distributionBasis', v as ConditionMaster['distributionBasis'])}
                   options={(['VALUE', 'EQUAL'] as const).map((value) => ({ value, label: DISTRIBUTION_LABELS[value] }))}
                 />
               </Field>
-            )}
-          </div>
-
-          <div className="mt-4">
-            <div className="mb-2 flex items-center justify-between">
-              <div className="text-[13px] font-bold text-slate-700">Minimum / Maximum Calculated Amount</div>
-              <Toggle checked={minMaxChargeOpen} onChange={(v) => { setMinMaxChargeOpen(v); if (!v) { set('minChargeAmount', undefined); set('maxChargeAmount', undefined); } }} />
-            </div>
-            {minMaxChargeOpen && (
-              <div className="grid grid-cols-2 gap-4">
-                <Field label="Minimum Calculated Amount" hint="Clamps the raw result up to this floor before sign/rounding — e.g. a 2% fee that's never less than ₹5,000.">
-                  <TextInput type="number" value={form.minChargeAmount ?? ''} onChange={(e) => set('minChargeAmount', e.target.value === '' ? undefined : Number(e.target.value))} placeholder="₹" />
-                </Field>
-                <Field label="Maximum Calculated Amount" hint="Clamps the raw result down to this ceiling before sign/rounding.">
-                  <TextInput type="number" value={form.maxChargeAmount ?? ''} onChange={(e) => set('maxChargeAmount', e.target.value === '' ? undefined : Number(e.target.value))} placeholder="₹" />
-                </Field>
-              </div>
             )}
           </div>
 
@@ -698,12 +677,6 @@ export function ConditionMasterForm({ existing, onClose }: { existing: Condition
             )}
 
             <div className="grid grid-cols-2 gap-4">
-              <Field label="Applicability — Entities" hint="Blank = all.">
-                <MultiChipSelect value={form.applicabilityEntities} onChange={(v) => set('applicabilityEntities', v)} options={ENTITIES.map((e) => ({ value: e.id, label: e.name }))} />
-              </Field>
-              <Field label="Applicability — Categories">
-                <MultiChipSelect value={form.applicabilityCategories} onChange={(v) => set('applicabilityCategories', v)} options={SPEND_CATEGORIES.map((c) => ({ value: c, label: c }))} />
-              </Field>
               <Field label="Custom Tags" className="col-span-2" hint="Free-form key/value metadata for this condition.">
                 <CustomTagsEditor tags={form.customTags} onChange={(customTags) => set('customTags', customTags)} />
               </Field>
